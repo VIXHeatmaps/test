@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Heatmap Viewer</title>
+
+  <!-- Chapter 1: LIBRARIES & CSS -->
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    /* 1.1: GLOBAL CSS */
+    html, body { font-size: 12px; font-family: sans-serif; margin: 12px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; }
+    .controls { flex: 1; }
+    .right-controls {
+      min-width: 220px;
+      display: flex; flex-direction: column; align-items: flex-start; gap: 6px; font-size: 12px;
+    }
+    .rc-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    .rc-row label, .csv-link, .export-btn, .select-note { font-size: 12px; }
+    .csv-link { color: #0074d9; text-decoration: underline; cursor: pointer; font-weight: 600; margin: 0 2px;}
+    .export-btn {
+      background: #1884f7; color: white; border: none; border-radius: 5px; padding: 2px 12px;
+      font-size: 12px; cursor: pointer; font-weight: 500; margin-top: 0;
+      transition: background 0.13s;
+    }
+    .export-btn:hover { background: #0059b2; }
+    .select-note { color: #189c2f; margin-left: 4px; }
+    #csvModal { display: none; position: fixed; z-index: 12; left: 0; top: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.13); align-items: center; justify-content: center;}
+    #csvModal .modal-content {
+      background: #fff; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+      padding: 12px 16px 10px 16px; min-width: 190px; max-width: 96vw; min-height: 30px; font-size: 12px;
+    }
+    #csvModal table { border-collapse: collapse; width: 100%; margin: 5px 0; background: #fcfcfc; font-size: 12px; }
+    #csvModal th, #csvModal td { border: 1px solid #d6d6d6; padding: 2px 6px; text-align: center; font-size: 12px; }
+    #csvModal th { background: #f7f7f9; font-weight: bold; }
+    #closeModalBtn { float: right; margin-top: -10px; margin-right: -7px; border: none; background: none; font-size: 16px; color: #888; cursor: pointer; }
+    #closeModalBtn:hover { color: #333; }
+    .heatmap-section { margin-top: 12px; padding-bottom: 18px; border-bottom: 1px solid #eee; font-size: 12px;}
+    .heatmap-section:last-child { border-bottom: none; }
+    .currentMaxH-label { font-weight: bold; margin-left:8px; font-size: 12px;}
+    .symbol-multiselect {
+      position: relative; width: 180px; max-width: 100%; z-index: 11; display: inline-block; font-size: 12px;
+    }
+    .symbol-multiselect .selected-label {
+      border: 1px solid #bbb; border-radius: 5px; padding: 2px 6px; min-height: 18px;
+      cursor: pointer; font-size: 12px; background: #fafbfc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .symbol-multiselect .selected-label:after {
+      content: "▼"; float: right; font-size: 10px; color: #888; margin-left: 4px;
+    }
+    .symbol-multiselect.open .selected-label { border-color: #1884f7; background: #f5faff;}
+    .symbol-multiselect-list {
+      position: absolute; top: 107%; left: 0; right: 0; min-width: 160px;
+      max-height: 220px; background: #fff; border: 1px solid #1884f7; border-radius: 6px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.07); padding: 4px 0 4px 0; overflow-y: auto; z-index: 99; font-size: 12px;
+    }
+    .symbol-multiselect-list label { display: flex; align-items: center; padding: 2px 6px; cursor: pointer; white-space: nowrap; transition: background 0.07s; font-size: 12px; }
+    .symbol-multiselect-list label:hover { background: #f2f6ff; }
+    .symbol-multiselect-list input[type=checkbox] { margin-right: 5px; }
+    input[type="range"], input[type="number"], select, button, input[type="file"], label, input[type="checkbox"] {
+      font-size: 12px; font-family: inherit; padding: 1px 2px;
+    }
+    .colorbar-input-container {
+      position: absolute; left: unset; right: 13px; z-index: 5;
+      pointer-events: none; width: 30px;
+    }
+    .colorbar-input {
+      pointer-events: auto; width: 30px; font-size: 12px;
+      border: 1px solid #bbb; border-radius: 3px; margin-bottom: 0px;
+      text-align: right; background: #fff;
+    }
+    .colorbar-label {
+      font-size: 11px; font-weight: bold; color: #444;
+      margin-bottom: 2px; margin-top: 2px; display: block; text-align: right;
+      user-select: none; pointer-events: none;
+    }
+  </style>
+  <!-- End Chapter 1 -->
+
+</head>
+<body>
+
+<!-- Chapter 2: LAYOUT & CONTROLS -->
+<div style="display: flex; justify-content: space-between; align-items: flex-start;">
+  <div class="controls">
+    <!-- 2.1: Metric Display (with Read Me button) -->
+    <div style="font-size: 14px; font-style: italic; margin-bottom: 10px; display:flex; align-items:center;">
+      <div>
+        <b>Metric:</b>
+        H = (AR – AR<sub>min</sub>) / max(MD, MD<sub>min</sub>)
+      </div>
+      <button id="readMeBtn"
+        style="margin-left:16px; font-size:13px; background:#f8f8f8; border:1px solid #bcbcbc; border-radius:6px; padding:2px 14px; cursor:pointer; font-weight:500;">
+        Read Me
+      </button>
+    </div>
+
+    <!-- 2.2: Symbol MultiSelect (with Select All/Unselect All) -->
+    <div style="font-weight:bold; margin-bottom:6px;">
+      Symbol:
+      <div class="symbol-multiselect" id="symbolMultiSelectBox">
+        <div class="selected-label" tabindex="0" id="symbolMultiSelectLabel">Select Symbol</div>
+        <div class="symbol-multiselect-list" id="symbolMultiSelectList" style="display:none;"></div>
+      </div>
+      <button id="selectAllBtn" style="margin-left:8px;">Select All</button>
+      <button id="unselectAllBtn" style="margin-left:3px;">Unselect All</button>
+      <button id="clearDataBtn" style="margin-left:8px;">Clear Data</button>
+    </div>
+    <!-- 2.3: Filters -->
+    <div><b>AR Min. (%):</b>
+      <input type="range" id="arFloor" min="0" max="100" step="0.1" value="1" style="width:110px;vertical-align:middle;">
+      <input type="number" id="arFloorNum" min="0" max="100" step="0.1" value="1" style="width:35px;">
+    </div>
+    <div><b>MD Min. (%):</b>
+      <input type="range" id="mdMin" min="0" max="100" step="0.1" value="3" style="width:110px;vertical-align:middle;">
+      <input type="number" id="mdMinNum" min="0" max="100" step="0.1" value="3" style="width:35px;">
+    </div>
+    <div><b>MD Max (%):</b>
+      <input type="range" id="mdCeil" min="0" max="100" step="0.1" value="20" style="width:110px;vertical-align:middle;">
+      <input type="number" id="mdCeilNum" min="0" max="100" step="0.1" value="20" style="width:35px;">
+    </div>
+  </div>
+  <!-- 2.5: Right Controls -->
+  <div class="right-controls">
+    <div class="rc-row">
+      <label for="dataSourceSelect">Data Source:</label>
+      <select id="dataSourceSelect">
+        <option>Exxahub</option>
+        <option>Testfol.io</option>
+        <option>Composer</option>
+        <option>Quantmage</option>
+        <option>Other</option>
+      </select>
+    </div>
+    <div class="rc-row">
+      <label style="font-weight: bold;">Upload <span class="csv-link" id="showCsvTemplate">CSV</span>:</label>
+      <input type="file" id="csvInput" accept=".csv">
+    </div>
+    <div class="rc-row">
+      <input type="checkbox" id="decimalToPercentBox">
+      <label for="decimalToPercentBox" style="font-weight:normal; margin-left:2px;">Decimal → %</label>
+      <span class="select-note">(select prior to upload)</span>
+    </div>
+    <button id="exportCSVBtn" class="export-btn">Download Data</button>
+  </div>
+</div>
+<!-- End Chapter 2 -->
+
+
+
+  <!-- Chapter 3: CSV MODAL -->
+  <div id="csvModal">
+    <div class="modal-content">
+      <button id="closeModalBtn" title="Close">&times;</button>
+      <div style="font-weight: bold; margin-bottom: 6px;">CSV Upload Template</div>
+      <table>
+        <tr>
+          <th>Symbol</th><th>Days</th><th>RSI</th><th>AR</th><th>MD</th>
+        </tr>
+        <tr>
+          <td>TQQQ</td><td>9</td><td>82</td><td>13.59%</td><td>9.63%</td>
+        </tr>
+      </table>
+      <div style="color: #008000; margin-top: 5px;">✓ (<b>column order doesn't matter</b>)</div>
+    </div>
+  </div>
+  <!-- End Chapter 3 -->
+<!-- 3.1: READ ME MODAL -->
+<div id="readMeModal" style="display:none; position:fixed; z-index:20; left:0; top:0; width:100vw; height:100vh; background:rgba(0,0,0,0.19); align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:7px; max-width:650px; width:95vw; box-shadow:0 2px 12px rgba(0,0,0,0.10); padding:18px 20px 16px 20px; font-size:15px; line-height:1.5; position:relative;">
+    <button id="closeReadMeBtn" style="position:absolute; top:12px; right:14px; background:none; border:none; font-size:20px; color:#888; cursor:pointer;">&times;</button>
+    <div id="readMeContent" style="white-space:pre-wrap;"></div>
+  </div>
+</div>
+
+  <!-- Chapter 4: HEATMAP CONTAINER -->
+  <div id="heatmapsContainer" style="margin-top:18px;"></div>
+  <!-- End Chapter 4 -->
+
+  <!-- Chapter 5: MAIN SCRIPT -->
+<script>
+  // 5.1: CSV Modal Logic
+  document.getElementById('showCsvTemplate').onclick = function() {
+    document.getElementById('csvModal').style.display = 'flex';
+  };
+  document.getElementById('closeModalBtn').onclick = function() {
+    document.getElementById('csvModal').style.display = 'none';
+  };
+  window.onclick = function(event) {
+    if (event.target === document.getElementById('csvModal')) {
+      document.getElementById('csvModal').style.display = 'none';
+    }
+  };
+// 5.1.1: Read Me Modal Logic
+document.getElementById('readMeBtn').onclick = async function() {
+  // Show modal immediately (loads content in background)
+  document.getElementById('readMeModal').style.display = 'flex';
+  document.getElementById('readMeContent').textContent = 'Loading...';
+  try {
+    const resp = await fetch('data/ReadMe.txt');
+    if (!resp.ok) throw new Error('File not found');
+    const text = await resp.text();
+    document.getElementById('readMeContent').textContent = text;
+  } catch (e) {
+    document.getElementById('readMeContent').textContent = "Could not load ReadMe.txt";
+  }
+};
+document.getElementById('closeReadMeBtn').onclick = function() {
+  document.getElementById('readMeModal').style.display = 'none';
+};
+window.addEventListener('click', function(event) {
+  const modal = document.getElementById('readMeModal');
+  if (event.target === modal) modal.style.display = 'none';
+});
+
+  // 5.2: GLOBAL STATE
+  window.allData = [];
+  let rawText = null;
+  let selectedSymbols = [];
+  let allSymbolList = [];
+  let tickerNameMap = {}; // Symbol -> Fund Name
+
+ // 5.3: DOM References
+const csvInput = document.getElementById('csvInput'),
+      arFloor = document.getElementById('arFloor'),
+      arFloorNum = document.getElementById('arFloorNum'),
+      mdMin = document.getElementById('mdMin'),
+      mdMinNum = document.getElementById('mdMinNum'),
+      mdCeil = document.getElementById('mdCeil'),
+      mdCeilNum = document.getElementById('mdCeilNum'),
+      dataSourceSelect = document.getElementById('dataSourceSelect'),
+      clearDataBtn = document.getElementById('clearDataBtn'),
+      decimalToPercentBox = document.getElementById('decimalToPercentBox'),
+      exportCSVBtn = document.getElementById('exportCSVBtn'),
+      heatmapsContainer = document.getElementById('heatmapsContainer');
+
+
+// 5.4: Symbol Multiselect Logic (with Select All / Unselect All)
+const symbolMultiSelectBox = document.getElementById('symbolMultiSelectBox');
+const symbolMultiSelectLabel = document.getElementById('symbolMultiSelectLabel');
+const symbolMultiSelectList = document.getElementById('symbolMultiSelectList');
+const selectAllBtn = document.getElementById('selectAllBtn');
+const unselectAllBtn = document.getElementById('unselectAllBtn');
+
+function getUniqueSymbolSources() {
+  if (!Array.isArray(window.allData)) return [];
+  const seen = new Set();
+  const combos = [];
+  window.allData.forEach(row => {
+    const key = `${row.symbol} (${row.source})`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      combos.push(key);
+    }
+  });
+  return combos;
+}
+
+function populateSymbols() {
+  allSymbolList = getUniqueSymbolSources();
+  selectedSymbols = [];
+  symbolMultiSelectList.innerHTML = '';
+  allSymbolList.forEach((sym, idx) => {
+    const id = `multisym-${idx}`;
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox" id="${id}" value="${sym}"> ${sym}`;
+    symbolMultiSelectList.appendChild(label);
+  });
+  // Auto-select first symbol and update UI
+  if (allSymbolList.length) {
+    selectedSymbols = [allSymbolList[0]];
+    symbolMultiSelectList.querySelector('input').checked = true;
+    updateSymbolLabel();
+    drawHeatmaps();
+  } else {
+    updateSymbolLabel();
+    drawHeatmaps();
+  }
+}
+
+function openSymbolList() {
+  symbolMultiSelectList.style.display = 'block';
+  symbolMultiSelectBox.classList.add('open');
+  symbolMultiSelectLabel.focus();
+}
+function closeSymbolList() {
+  symbolMultiSelectList.style.display = 'none';
+  symbolMultiSelectBox.classList.remove('open');
+}
+symbolMultiSelectLabel.onclick = () => {
+  if (symbolMultiSelectList.style.display === 'block') closeSymbolList();
+  else openSymbolList();
+};
+symbolMultiSelectLabel.onkeydown = (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault(); openSymbolList();
+  }
+};
+symbolMultiSelectList.onclick = (e) => {
+  if (e.target.tagName === "INPUT") {
+    const sym = e.target.value;
+    if (e.target.checked) {
+      if (!selectedSymbols.includes(sym)) selectedSymbols.push(sym);
+    } else {
+      selectedSymbols = selectedSymbols.filter(s => s !== sym);
+    }
+    updateSymbolLabel(); drawHeatmaps();
+  }
+};
+document.addEventListener('mousedown', (e) => {
+  if (!symbolMultiSelectBox.contains(e.target)) closeSymbolList();
+});
+function updateSymbolLabel() {
+  if (selectedSymbols.length === 0) symbolMultiSelectLabel.innerText = "Select Symbol";
+  else if (selectedSymbols.length === 1) symbolMultiSelectLabel.innerText = selectedSymbols[0];
+  else symbolMultiSelectLabel.innerText = `${selectedSymbols.length} symbols`;
+}
+
+// New: Select All and Unselect All button logic
+selectAllBtn.addEventListener('click', () => {
+  selectedSymbols = [...allSymbolList];
+  // Check all checkboxes in the symbolMultiSelectList
+  symbolMultiSelectList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = true; });
+  updateSymbolLabel();
+  drawHeatmaps();
+});
+
+unselectAllBtn.addEventListener('click', () => {
+  selectedSymbols = [];
+  // Uncheck all checkboxes in the symbolMultiSelectList
+  symbolMultiSelectList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = false; });
+  updateSymbolLabel();
+  drawHeatmaps();
+});
+
+
+ // 5.5: Clear Data
+clearDataBtn.addEventListener('click', () => {
+  window.allData = [];
+  selectedSymbols = [];
+  allSymbolList = [];
+  symbolMultiSelectList.innerHTML = '';
+  updateSymbolLabel();
+  heatmapsContainer.innerHTML = '';
+});
+
+
+  // 5.6: Load TickerNames.csv on page load
+  async function loadTickerNames() {
+    try {
+      const resp = await fetch('data/TickerNames.csv');
+      if (!resp.ok) throw new Error('TickerNames.csv not found');
+      const csv = await resp.text();
+      csv.split(/\r?\n/).forEach((line, i) => {
+        if (!line.trim() || i === 0) return; // skip header or blank
+        const [symbol, name] = line.split(',');
+        if (symbol && name) tickerNameMap[symbol.trim()] = name.trim();
+      });
+    } catch (e) {
+      tickerNameMap = {};
+    }
+  }
+
+  // 5.7: Autoload CSV on Page Load
+  window.addEventListener('DOMContentLoaded', async () => {
+    await loadTickerNames();
+    let filesToFetch = [];
+    for (let i = 1; i <= 20; i++) {
+      filesToFetch.push(`data/LoadData${i}.csv`);
+    }
+    let filesLoaded = 0;
+    let atLeastOneLoaded = false;
+    filesToFetch.forEach((filename) => {
+      fetch(filename)
+        .then(response => {
+          if (!response.ok) throw new Error('Network response was not ok');
+          return response.text();
+        })
+        .then(csvText => {
+          atLeastOneLoaded = true;
+          let shortName = filename.replace(/^data\/|\.csv$/g, '');
+          buildFromText(csvText, shortName);
+        })
+        .catch(error => {
+          // Ignore errors (file missing)
+        })
+        .finally(() => {
+          filesLoaded++;
+          if (filesLoaded === filesToFetch.length) {
+            if (atLeastOneLoaded) {
+              populateSymbols();
+            }
+          }
+        });
+    });
+  });
+
+  // 5.8: CSV File Input Handler
+  csvInput.addEventListener('change', e => {
+    const reader = new FileReader();
+    reader.onload = evt => {
+      rawText = evt.target.result;
+      let source = dataSourceSelect.value;
+      buildFromText(rawText, source);
+      populateSymbols();
+    };
+    reader.readAsText(e.target.files[0]);
+  });
+
+  // 5.9: Slider/Input Sync
+  [arFloor, arFloorNum].forEach(el => el.oninput = () => {
+    arFloor.value = arFloorNum.value = el.value; drawHeatmaps();
+  });
+  [mdMin, mdMinNum].forEach(el => el.oninput = () => {
+    mdMin.value = mdMinNum.value = el.value; drawHeatmaps();
+  });
+  [mdCeil, mdCeilNum].forEach(el => el.oninput = () => {
+    mdCeil.value = mdCeilNum.value = el.value; drawHeatmaps();
+  });
+
+// 5.10: Draw Heatmaps (with TickerNames, custom axes, improved axis label placement, per-heatmap Max H, and GLOBAL colorbar min/max)
+window.colorbarMinGlobal = -1;  // Default min value
+window.colorbarMaxGlobal = 1;   // Default max value
+
+function drawHeatmaps() {
+  heatmapsContainer.innerHTML = '';
+  if (!selectedSymbols.length) {
+    const msg = document.createElement('div');
+    msg.style.textAlign = 'center';
+    msg.style.margin = '30px 0 30px 0';
+    msg.style.color = '#666';
+    msg.style.fontSize = '1.10em';
+    msg.innerHTML = 'Select one or more symbols above to view heatmaps.';
+    heatmapsContainer.appendChild(msg);
+    return;
+  }
+  let overallMaxH = -Infinity;
+  selectedSymbols.forEach((symbolSource, plotIdx) => {
+    const match = symbolSource.match(/^(.*) \((.*)\)$/);
+    if (!match) return;
+    const symbol = match[1];
+    const source = match[2];
+    const rows = window.allData.filter(r => r.symbol === symbol && r.source === source);
+    if (!rows.length) return;
+    const xs = Array.from(new Set(rows.map(r => r.rsi))).sort((a, b) => +a - +b);
+    const ys = Array.from(new Set(rows.map(r => r.day))).sort((a, b) => +a - +b);
+    const arM = ys.map(y => xs.map(x => {
+      const rec = rows.find(r => r.day === y && r.rsi === x);
+      return rec ? rec.ar : null;
+    }));
+    const mdM = ys.map(y => xs.map(x => {
+      const rec = rows.find(r => r.day === y && r.rsi === x);
+      return rec ? rec.md : null;
+    }));
+    const cmM = ys.map(y => xs.map(x => {
+      const rec = rows.find(r => r.day === y && r.rsi === x);
+      return rec ? rec.cm : null;
+    }));
+    const floor = +arFloor.value;
+    const minMD = +mdMin.value;
+    const ceilMD = +mdCeil.value;
+    // GLOBAL colorbar min/max for ALL heatmaps
+    let zminVal = window.colorbarMinGlobal;
+    let zmaxVal = window.colorbarMaxGlobal;
+    const H = computeH(arM, mdM, floor, minMD);
+    const EPSILON = 1e-6;
+    let mask;
+    if (ceilMD <= EPSILON) mask = mdM.map(row => row.map(() => 1));
+    else if (ceilMD >= 100 - EPSILON) mask = mdM.map(row => row.map(() => 0));
+    else mask = mdM.map(row => row.map(v => (v != null && v > ceilMD) ? 1 : 0));
+    let maxH = -Infinity;
+    H.forEach(row => row.forEach(v => { if (v != null && v > maxH) maxH = v; }));
+    if (maxH > overallMaxH) overallMaxH = maxH;
+
+    // --- Layout: Fund name between ticker/source and heatmap, plus per-heatmap Max H
+    const fundName = tickerNameMap[symbol] || "";
+    section = document.createElement('div');
+    section.className = 'heatmap-section';
+    section.innerHTML = `
+      <div style="position:relative;">
+        <div id="heatmap-title-${plotIdx}" style="text-align:center;">
+          <div style="font-size:18px;color:#1b365d;font-weight:500;margin-bottom:0px;">${symbolSource}</div>
+          ${fundName ? `<div style="font-size:12px; color:#2e4057; margin-top:2px; margin-bottom:5px;">${fundName}</div>` : ""}
+          <div style="font-size:12px; font-weight:bold; color:#1e522e; margin-bottom:8px;">Current Max H: ${maxH === -Infinity ? '--' : maxH.toFixed(3)}</div>
+        </div>
+        <div style="display:flex; flex-direction:row; align-items:center;">
+          <!-- Y Axis Hover (Days, with number ABOVE the word) -->
+          <div id="yHoverBox-${plotIdx}" style="width:45px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:56vh;">
+            <span style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; writing-mode: vertical-lr; transform: rotate(180deg); font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; letter-spacing:0.5px;">
+              <span id="hoverYValue-${plotIdx}" style="font-size:19px; font-weight:700; color:#253358; min-height:18px; margin-top:0; margin-bottom:8px;"></span>
+              <span style="font-size:16px; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-weight:300; color:#3e5678; margin-top:0;">Days</span>
+            </span>
+          </div>
+          <div style="flex:1;">
+            <div id="heatmap-${plotIdx}" style="height: 56vh;"></div>
+            <div class="colorbar-input-container" style="top: 2px;" id="colorbar-max-container-${plotIdx}">
+              <span class="colorbar-label">Max H</span>
+              <input type="number" step="0.01" value="${zmaxVal}" id="colorbar-max-${plotIdx}" class="colorbar-input">
+            </div>
+            <div class="colorbar-input-container" style="bottom: 16px; top:unset;" id="colorbar-min-container-${plotIdx}">
+              <span class="colorbar-label">Min H</span>
+              <input type="number" step="0.01" value="${zminVal}" id="colorbar-min-${plotIdx}" class="colorbar-input">
+            </div>
+          </div>
+        </div>
+        <!-- X Axis Hover (RSI) -->
+        <div style="display: flex; flex-direction:column; align-items:center; margin-top:2px;">
+          <span style="font-size:16px; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-weight:300; color:#3e5678; margin-bottom:0; letter-spacing:0.5px;">RSI</span>
+          <span id="hoverXValue-${plotIdx}" style="font-size:19px; font-weight:700; color:#253358; min-height:18px;"></span>
+        </div>
+      </div>
+    `;
+    heatmapsContainer.appendChild(section);
+
+    // --- Main heatmap plot
+    const heatDiv = section.querySelector(`#heatmap-${plotIdx}`);
+    Plotly.newPlot(heatDiv, [
+      {
+        z: H, x: xs, y: ys, type: 'heatmap',
+        colorscale: [[0, 'green'], [0.5, 'yellow'], [1, 'red']],
+        zmin: zminVal, zmax: zmaxVal,
+        colorbar: {
+          thickness: 15, len: 0.92, x: 1.01, y: 0.5, tickfont: {size: 12}
+        },
+        customdata: arM.map((r, i) => r.map((_, j) => [arM[i][j], mdM[i][j], cmM[i][j], H[i][j]])),
+        hovertemplate: 'AR: %{customdata[0]:.2f}%<br>MD: %{customdata[1]:.2f}%<br>Calmar: %{customdata[2]:.2f}<br>H: %{customdata[3]:.3f}<extra></extra>'
+      },
+      {
+        z: mask, x: xs, y: ys, type: 'heatmap', showscale: false,
+        colorscale: [[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0.45)']], hoverinfo: 'skip'
+      }
+    ], {
+      margin: { l: 30, r: 65, t: 15, b: 45 },
+      xaxis: { title: '', tickfont: {size:12}, titlefont:{size:12} },
+      yaxis: { title: '', tickfont: {size:12}, titlefont:{size:12} },
+      annotations: []
+    }, { responsive: true });
+
+    // --- GLOBAL colorbar min/max event handlers (sync all boxes, update all charts)
+    setTimeout(() => {
+      const minInput = document.getElementById(`colorbar-min-${plotIdx}`);
+      const maxInput = document.getElementById(`colorbar-max-${plotIdx}`);
+
+      minInput.onchange = function() {
+        window.colorbarMinGlobal = Number(minInput.value);
+        // sync all input boxes to the same global value
+        document.querySelectorAll('.colorbar-input[id^="colorbar-min-"]').forEach(inp => inp.value = window.colorbarMinGlobal);
+        drawHeatmaps();
+      };
+      maxInput.onchange = function() {
+        window.colorbarMaxGlobal = Number(maxInput.value);
+        document.querySelectorAll('.colorbar-input[id^="colorbar-max-"]').forEach(inp => inp.value = window.colorbarMaxGlobal);
+        drawHeatmaps();
+      };
+      // If user blurs (clicks away), always sync
+      minInput.onblur = function() {
+        document.querySelectorAll('.colorbar-input[id^="colorbar-min-"]').forEach(inp => inp.value = window.colorbarMinGlobal);
+      }
+      maxInput.onblur = function() {
+        document.querySelectorAll('.colorbar-input[id^="colorbar-max-"]').forEach(inp => inp.value = window.colorbarMaxGlobal);
+      }
+    }, 0);
+
+    // --- Custom crosshair values (RSI and Days)
+    const hoverX = section.querySelector(`#hoverXValue-${plotIdx}`);
+    const hoverY = section.querySelector(`#hoverYValue-${plotIdx}`);
+
+    heatDiv.on('plotly_hover', function(eventData) {
+      var pt = eventData.points[0];
+      hoverX.innerText = pt.x;
+      hoverY.innerText = pt.y;
+    });
+    heatDiv.on('plotly_unhover', function() {
+      hoverX.innerText = '';
+      hoverY.innerText = '';
+    });
+  });
+}
+
+
+
+
+  // 5.11: Compute H Function
+  function computeH(ar, md, floor, minMD) {
+    return ar.map((row, i) => row.map((v, j) => {
+      if (v == null) return null;
+      return (v - floor) / Math.max(md[i][j], minMD);
+    }));
+  }
+
+  // 5.12: Export CSV Logic
+  exportCSVBtn.addEventListener('click', function() {
+    const floor = +arFloor.value;
+    const minMD = +mdMin.value;
+    const ceilMD = +mdCeil.value;
+    const hColName = `H (Rmin${floor}|Dmin${minMD}|Dmax${ceilMD})`;
+    let csv = `Symbol,Source,Days,RSI,AR,MD,Calmar,${hColName}\n`;
+    selectedSymbols.forEach(symbolSource => {
+      const match = symbolSource.match(/^(.*) \((.*)\)$/);
+      if (!match) return;
+      const symbol = match[1];
+      const source = match[2];
+      const rows = window.allData.filter(r => r.symbol === symbol && r.source === source);
+      const xs = Array.from(new Set(rows.map(r => r.rsi))).sort((a, b) => +a - +b);
+      const ys = Array.from(new Set(rows.map(r => r.day))).sort((a, b) => +a - +b);
+      const arM = ys.map(y => xs.map(x => {
+        const rec = rows.find(r => r.day === y && r.rsi === x);
+        return rec ? rec.ar : null;
+      }));
+      const mdM = ys.map(y => xs.map(x => {
+        const rec = rows.find(r => r.day === y && r.rsi === x);
+        return rec ? rec.md : null;
+      }));
+      const cmM = ys.map(y => xs.map(x => {
+        const rec = rows.find(r => r.day === y && r.rsi === x);
+        return rec ? rec.cm : null;
+      }));
+      const H = computeH(arM, mdM, floor, minMD);
+      for (let i = 0; i < ys.length; ++i) {
+        for (let j = 0; j < xs.length; ++j) {
+          if (arM[i][j] == null) continue;
+          csv += [
+            `"${symbol}"`,
+            `"${source}"`,
+            ys[i], xs[j],
+            arM[i][j], mdM[i][j],
+            (cmM[i][j] == null ? "" : cmM[i][j]),
+            (H[i][j] == null ? "" : H[i][j].toFixed(5))
+          ].join(",") + "\n";
+        }
+      }
+    });
+    const blob = new Blob([csv], {type: "text/csv"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "merged_heatmap_data.csv";
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 0);
+  });
+
+  // 5.13: Build From Text Function
+  function buildFromText(text, defaultSource) {
+    const lines = text.trim().split(/\r?\n/);
+    if (!lines.length) return;
+
+    const headerMap = {
+      symbol: ['symbol', 'ticker', 'name'],
+      source: ['source', 'data source', 'datasource', 'data'],
+      day: ['day', 'days', 'timeframe', 'window', 'period', 'lookback'],
+      rsi: ['rsi', 'relative strength index'],
+      ar: ['ar', 'annualized return', 'cagr'],
+      md: ['md', 'max drawdown', 'drawdown']
+    };
+
+    function findCol(headers, aliases) {
+      for (let i = 0; i < headers.length; ++i) {
+        const h = headers[i].trim().toLowerCase();
+        if (aliases.includes(h)) return i;
+      }
+      return -1;
+    }
+
+    const headers = lines[0].split(',');
+    const colIdx = {};
+    Object.keys(headerMap).forEach(key => {
+      const idx = findCol(headers, headerMap[key].map(s => s.toLowerCase()));
+      if (idx === -1 && key !== 'source') {
+        throw new Error(`Missing column for ${key} (${headerMap[key].join('/')})`);
+      }
+      colIdx[key] = idx;
+    });
+
+    for (let i = 1; i < lines.length; ++i) {
+      const c = lines[i].split(',');
+      if (c.length < headers.length) continue;
+      const symbol = c[colIdx.symbol];
+      const source = (colIdx.source !== -1 && c[colIdx.source]) ? c[colIdx.source] : defaultSource;
+      const day = +c[colIdx.day];
+      const rsi = c[colIdx.rsi];
+      let ar = parseFloat(c[colIdx.ar]), md = parseFloat(c[colIdx.md]);
+      if (decimalToPercentBox && decimalToPercentBox.checked) {
+        ar *= 100; md *= 100;
+      }
+      const cm = (md === 0 ? null : ar / md);
+      window.allData.push({ symbol, source, day, rsi, ar, md, cm });
+    }
+  }
+</script>
+<!-- End Chapter 5: MAIN SCRIPT -->
+
+
+</body>
+</html>
+
