@@ -97,18 +97,18 @@
       </button>
     </div>
 
-  <!-- 2.2: Symbol MultiSelect (with Select All/Unselect All & Sort by Max H) -->
-<div style="font-weight:bold; margin-bottom:6px;">
-  Symbol:
-  <div class="symbol-multiselect" id="symbolMultiSelectBox">
-    <div class="selected-label" tabindex="0" id="symbolMultiSelectLabel">Select Symbol</div>
-    <div class="symbol-multiselect-list" id="symbolMultiSelectList" style="display:none;"></div>
-  </div>
-  <button id="sortSymbolsBtn" style="margin-left:8px;">Sort by Max H</button>
-  <button id="selectAllBtn" style="margin-left:8px;">Select All</button>
-  <button id="unselectAllBtn" style="margin-left:3px;">Unselect All</button>
-  <button id="clearDataBtn" style="margin-left:8px;">Clear Data</button>
-</div>
+    <!-- 2.2: Symbol MultiSelect (with Sort, Select All/Unselect All & Clear) -->
+    <div style="font-weight:bold; margin-bottom:6px;">
+      Symbol:
+      <div class="symbol-multiselect" id="symbolMultiSelectBox">
+        <div class="selected-label" tabindex="0" id="symbolMultiSelectLabel">Select Symbol</div>
+        <div class="symbol-multiselect-list" id="symbolMultiSelectList" style="display:none;"></div>
+      </div>
+      <button id="sortSymbolsBtn" style="margin-left:8px;">Sort by Max H</button>
+      <button id="selectAllBtn" style="margin-left:8px;">Select All</button>
+      <button id="unselectAllBtn" style="margin-left:3px;">Unselect All</button>
+      <button id="clearDataBtn" style="margin-left:8px;">Clear Data</button>
+    </div>
 
     <!-- 2.3: Filters -->
     <div><b>AR Min. (%):</b>
@@ -123,8 +123,46 @@
       <input type="range" id="mdCeil" min="0" max="100" step="0.1" value="20" style="width:110px;vertical-align:middle;">
       <input type="number" id="mdCeilNum" min="0" max="100" step="0.1" value="20" style="width:35px;">
     </div>
+
+    <!-- 2.4: Variables -->
+    <div style="margin-top:8px;">
+      <b>Variables:</b>
+      <div class="rc-row" style="margin-top:2px;">
+        <label for="xVarNameInput">X:</label>
+        <input id="xVarNameInput" type="text" value="RSI" style="width:100px;">
+        <label for="yVarNameInput" style="margin-left:8px;">Y:</label>
+        <input id="yVarNameInput" type="text" value="Days" style="width:100px;">
+      </div>
+      <div style="font-size:11px; color:#666; margin-top:4px;">
+        (Viewer will look for CSV columns matching these names — case/spacing insensitive.)
+      </div>
+    </div>
+
+    <!-- 2.5: Display Mode -->
+    <div style="margin-top:8px;">
+      <b>Display Mode:</b>
+      <select id="modeSelect">
+        <option value="2d" selected>2D Grid</option>
+        <option value="1d-y">1D – Y only</option>
+        <option value="1d-x">1D – X only</option>
+      </select>
+      <span style="font-size:11px; color:#777;">(1D shows a single wide column along the chosen variable.)</span>
+    </div>
+
+    <!-- 2.6: Proximity Grid -->
+    <div style="margin-top:8px;">
+      <b>Proximity Grid:</b>
+      <select id="proximityGridSelect">
+        <option value="1">Single Cell (1x1)</option>
+        <option value="3">3x3</option>
+        <option value="5">5x5</option>
+        <option value="7">7x7</option>
+      </select>
+      <span style="font-size:11px; color:#777;">(average H in grid)</span>
+    </div>
   </div>
-  <!-- 2.5: Right Controls -->
+
+  <!-- 2.7: Right Controls -->
   <div class="right-controls">
     <div class="rc-row">
       <label for="dataSourceSelect">Data Source:</label>
@@ -148,19 +186,8 @@
     <button id="exportCSVBtn" class="export-btn">Download Data</button>
   </div>
 </div>
-
-<!-- 2.4: Proximity Grid Selector -->
-<div style="margin-top:8px;">
-  <b>Proximity Grid:</b>
-  <select id="proximityGridSelect">
-    <option value="1">Single Cell (1x1)</option>
-    <option value="3">3x3</option>
-    <option value="5">5x5</option>
-    <option value="7">7x7</option>
-  </select>
-  <span style="font-size:11px; color:#777;">(average H in grid)</span>
-</div>
 <!-- End Chapter 2 -->
+
 
 
   <!-- Chapter 3: CSV MODAL -->
@@ -193,7 +220,9 @@
   <!-- End Chapter 4 -->
 
 <script>
-  // 5.1: CSV Modal Logic
+ <!-- Chapter 5: MAIN SCRIPT (Variable-agnostic + 1D/2D modes) -->
+<script>
+  // 5.1: CSV & ReadMe modal logic (unchanged UX)
   document.getElementById('showCsvTemplate').onclick = function() {
     document.getElementById('csvModal').style.display = 'flex';
   };
@@ -205,7 +234,6 @@
       document.getElementById('csvModal').style.display = 'none';
     }
   };
-  // 5.1.1: Read Me Modal Logic
   document.getElementById('readMeBtn').onclick = async function() {
     document.getElementById('readMeModal').style.display = 'flex';
     document.getElementById('readMeContent').textContent = 'Loading...';
@@ -226,200 +254,178 @@
     if (event.target === modal) modal.style.display = 'none';
   });
 
-// 5.2: GLOBAL STATE
-window.allData = [];
-let rawText = null;
-let selectedSymbols = [];
-let allSymbolList = [];
-let tickerNameMap = {};
-let sortByMaxH = false; // Default sort: alphabetical
+  // 5.2: GLOBAL STATE
+  window.allData = [];            // array of { symbol, source, ar, md, cm, cols:{normName:number} }
+  window._rowSeen = new Set();    // ingestion de-dup key set
+  let rawText = null;
 
-// --- Set global colorbar min/max defaults on page load ---
-window.colorbarMinGlobal = -1;
-window.colorbarMaxGlobal = 1;
+  // Selected symbols & list
+  let selectedSymbols = [];
+  let allSymbolList = [];
 
+  // Ticker names mapping
+  let tickerNameMap = {};
 
- // 5.3: DOM References
-const csvInput = document.getElementById('csvInput'),
-      arFloor = document.getElementById('arFloor'),
-      arFloorNum = document.getElementById('arFloorNum'),
-      mdMin = document.getElementById('mdMin'),
-      mdMinNum = document.getElementById('mdMinNum'),
-      mdCeil = document.getElementById('mdCeil'),
-      mdCeilNum = document.getElementById('mdCeilNum'),
-      dataSourceSelect = document.getElementById('dataSourceSelect'),
-      clearDataBtn = document.getElementById('clearDataBtn'),
-      decimalToPercentBox = document.getElementById('decimalToPercentBox'),
-      exportCSVBtn = document.getElementById('exportCSVBtn'),
-      heatmapsContainer = document.getElementById('heatmapsContainer'),
-      proximityGridSelect = document.getElementById('proximityGridSelect'),
-      sortSymbolsBtn = document.getElementById('sortSymbolsBtn');
+  // Sorting toggle
+  let sortByMaxH = false;
 
+  // Global colorbar defaults (shared by all plots)
+  window.colorbarMinGlobal = -1;
+  window.colorbarMaxGlobal = 1;
 
-  // 5.4: Symbol Multiselect Logic (with Select All / Unselect All)
-  const symbolMultiSelectBox = document.getElementById('symbolMultiSelectBox');
-  const symbolMultiSelectLabel = document.getElementById('symbolMultiSelectLabel');
+  // Variable names & mode (defaults keep current behavior)
+  let xVarName = 'RSI';
+  let yVarName = 'Days';
+  let xVarNorm = null; // computed on first DOMContentLoaded
+  let yVarNorm = null;
+  let displayMode = '2d'; // '2d' | '1d-x' | '1d-y'
+
+  // 5.3: DOM References
+  const csvInput = document.getElementById('csvInput'),
+        arFloor = document.getElementById('arFloor'),
+        arFloorNum = document.getElementById('arFloorNum'),
+        mdMin = document.getElementById('mdMin'),
+        mdMinNum = document.getElementById('mdMinNum'),
+        mdCeil = document.getElementById('mdCeil'),
+        mdCeilNum = document.getElementById('mdCeilNum'),
+        dataSourceSelect = document.getElementById('dataSourceSelect'),
+        clearDataBtn = document.getElementById('clearDataBtn'),
+        decimalToPercentBox = document.getElementById('decimalToPercentBox'),
+        exportCSVBtn = document.getElementById('exportCSVBtn'),
+        heatmapsContainer = document.getElementById('heatmapsContainer'),
+        proximityGridSelect = document.getElementById('proximityGridSelect'),
+        sortSymbolsBtn = document.getElementById('sortSymbolsBtn');
+
+  const xVarNameInput = document.getElementById('xVarNameInput');
+  const yVarNameInput = document.getElementById('yVarNameInput');
+  const modeSelect   = document.getElementById('modeSelect');
+
+  // 5.4: Helpers — header normalization & safe parse
+  function normalizeHeader(h) {
+    return String(h || '')
+      .toLowerCase()
+      .replace(/[\s_\-\$%]+/g, '') // remove spaces/underscores/dashes/$/%
+      .replace(/s$/, '');          // simple singularization
+  }
+  function safeNum(v) {
+    if (v == null) return null;
+    const t = String(v).trim();
+    if (t === '') return null;
+    // allow "12.3%", "1,234.5", etc.
+    const n = parseFloat(t.replace(/,/g, '').replace(/%$/, ''));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // 5.5: Symbol multiselect (+ sort by Max H, preserve selection)
+  const symbolMultiSelectBox  = document.getElementById('symbolMultiSelectBox');
+  const symbolMultiSelectLabel= document.getElementById('symbolMultiSelectLabel');
   const symbolMultiSelectList = document.getElementById('symbolMultiSelectList');
-  const selectAllBtn = document.getElementById('selectAllBtn');
-  const unselectAllBtn = document.getElementById('unselectAllBtn');
+  const selectAllBtn          = document.getElementById('selectAllBtn');
+  const unselectAllBtn        = document.getElementById('unselectAllBtn');
 
-// 5.4.1: Sorting Logic (uses Proximity Grid averaged H for sorting)
-function getMaxHForSymbolSource(symbolSource) {
-  const match = symbolSource.match(/^(.*) \((.*)\)$/);
-  if (!match) return -Infinity;
-  const symbol = match[1];
-  const source = match[2];
-  const rows = window.allData.filter(r => r.symbol === symbol && r.source === source);
-  if (!rows.length) return -Infinity;
-  // Recompute H with current filter settings and proximity grid size
-  const xs = Array.from(new Set(rows.map(r => r.rsi))).sort((a, b) => +a - +b);
-  const ys = Array.from(new Set(rows.map(r => r.day))).sort((a, b) => +a - +b);
-  const arM = ys.map(y => xs.map(x => {
-    const rec = rows.find(r => r.day === y && r.rsi === x);
-    return rec ? rec.ar : null;
-  }));
-  const mdM = ys.map(y => xs.map(x => {
-    const rec = rows.find(r => r.day === y && r.rsi === x);
-    return rec ? rec.md : null;
-  }));
-  const floor = +arFloor.value;
-  const minMD = +mdMin.value;
-  const proxGrid = typeof proximityGridSize !== 'undefined' ? proximityGridSize : 1;
-  const baseH = computeH(arM, mdM, floor, minMD);
-  const H = computeProximityGridAverage(baseH, proxGrid);
-  let maxH = -Infinity;
-  H.forEach(row => row.forEach(v => { if (v != null && v > maxH) maxH = v; }));
-  return maxH;
-}
+  function getUniqueSymbolSources() {
+    if (!Array.isArray(window.allData)) return [];
+    const seen = new Set();
+    const combos = [];
+    window.allData.forEach(row => {
+      const key = `${row.symbol} (${row.source})`;
+      if (!seen.has(key)) { seen.add(key); combos.push(key); }
+    });
+    return combos;
+  }
 
-function getSortedSymbolList() {
-  let baseList = getUniqueSymbolSources();
-  if (sortByMaxH) {
+  function updateSymbolLabel() {
+    if (selectedSymbols.length === 0) symbolMultiSelectLabel.innerText = "Select Symbol";
+    else if (selectedSymbols.length === 1) symbolMultiSelectLabel.innerText = selectedSymbols[0];
+    else symbolMultiSelectLabel.innerText = `${selectedSymbols.length} symbols`;
+  }
+
+  function openSymbolList(){ symbolMultiSelectList.style.display='block'; symbolMultiSelectBox.classList.add('open'); symbolMultiSelectLabel.focus(); }
+  function closeSymbolList(){ symbolMultiSelectList.style.display='none'; symbolMultiSelectBox.classList.remove('open'); }
+  symbolMultiSelectLabel.onclick = () => { (symbolMultiSelectList.style.display==='block') ? closeSymbolList() : openSymbolList(); };
+  symbolMultiSelectLabel.onkeydown = (e) => { if (e.key==='Enter' || e.key===' ') { e.preventDefault(); openSymbolList(); } };
+  document.addEventListener('mousedown', (e) => { if (!symbolMultiSelectBox.contains(e.target)) closeSymbolList(); });
+
+  function populateSymbols() {
+    const prevSelected = new Set(selectedSymbols);
+    allSymbolList = getSortedSymbolList();
+    symbolMultiSelectList.innerHTML = '';
+    selectedSymbols = [];
+    allSymbolList.forEach((sym, idx) => {
+      const id = `multisym-${idx}`;
+      const label = document.createElement('label');
+      label.innerHTML = `<input type="checkbox" id="${id}" value="${sym}"> ${sym}`;
+      const cb = label.querySelector('input');
+      if (prevSelected.has(sym)) { cb.checked = true; selectedSymbols.push(sym); }
+      symbolMultiSelectList.appendChild(label);
+    });
+    if (!selectedSymbols.length && allSymbolList.length) {
+      selectedSymbols = [allSymbolList[0]];
+      symbolMultiSelectList.querySelector('input').checked = true;
+    }
+    updateSymbolLabel();
+    drawHeatmaps();
+  }
+
+  symbolMultiSelectList.onclick = (e) => {
+    if (e.target.tagName === "INPUT") {
+      const sym = e.target.value;
+      if (e.target.checked) { if (!selectedSymbols.includes(sym)) selectedSymbols.push(sym); }
+      else { selectedSymbols = selectedSymbols.filter(s => s !== sym); }
+      updateSymbolLabel(); drawHeatmaps();
+    }
+  };
+
+  selectAllBtn.addEventListener('click', () => {
+    selectedSymbols = [...allSymbolList];
+    symbolMultiSelectList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = true; });
+    updateSymbolLabel(); drawHeatmaps();
+  });
+  unselectAllBtn.addEventListener('click', () => {
+    selectedSymbols = [];
+    symbolMultiSelectList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = false; });
+    updateSymbolLabel(); drawHeatmaps();
+  });
+
+  // 5.5.1: Sorting (by current Max H, respecting current variables/mode/filters/proximity)
+  sortSymbolsBtn.textContent = sortByMaxH ? "A→Z" : "Sort by Max H";
+  sortSymbolsBtn.addEventListener('click', () => {
+    sortByMaxH = !sortByMaxH;
+    sortSymbolsBtn.textContent = sortByMaxH ? "A→Z" : "Sort by Max H";
+    populateSymbols();
+  });
+
+  function getSortedSymbolList() {
+    let baseList = getUniqueSymbolSources();
+    if (!sortByMaxH) return baseList.slice().sort((a,b)=>a.localeCompare(b));
     return baseList
       .map(sym => ({ sym, maxH: getMaxHForSymbolSource(sym) }))
       .sort((a, b) => b.maxH - a.maxH)
       .map(obj => obj.sym);
-  } else {
-    return baseList.slice().sort((a, b) => a.localeCompare(b));
-  }
-}
-
-
-// 5.4.2: Sort Button Event & Symbol Multiselect Logic
-
-// Set initial sort button label
-sortSymbolsBtn.textContent = sortByMaxH ? "A→Z" : "Sort by Max H";
-
-sortSymbolsBtn.addEventListener('click', () => {
-  sortByMaxH = !sortByMaxH;
-  sortSymbolsBtn.textContent = sortByMaxH ? "A→Z" : "Sort by Max H";
-  populateSymbols();
-});
-
-// --- Preserve selections when (re)populating symbol list ---
-function populateSymbols() {
-  // 1. Save current selection before rebuilding
-  const prevSelected = new Set(selectedSymbols);
-
-  // 2. Build sorted symbol list and clear old HTML
-  allSymbolList = getSortedSymbolList();
-  symbolMultiSelectList.innerHTML = '';
-  selectedSymbols = [];
-
-  // 3. Render options, restoring previously selected items
-  allSymbolList.forEach((sym, idx) => {
-    const id = `multisym-${idx}`;
-    const label = document.createElement('label');
-    label.innerHTML = `<input type="checkbox" id="${id}" value="${sym}"> ${sym}`;
-    const cb = label.querySelector('input');
-    if (prevSelected.has(sym)) {
-      cb.checked = true;
-      selectedSymbols.push(sym);
-    }
-    symbolMultiSelectList.appendChild(label);
-  });
-
-  // 4. If nothing is selected, select the first symbol
-  if (!selectedSymbols.length && allSymbolList.length) {
-    selectedSymbols = [allSymbolList[0]];
-    symbolMultiSelectList.querySelector('input').checked = true;
   }
 
-  updateSymbolLabel();
-  drawHeatmaps();
-}
+  function getMaxHForSymbolSource(symbolSource) {
+    const match = symbolSource.match(/^(.*) \((.*)\)$/);
+    if (!match) return -Infinity;
+    const symbol = match[1], source = match[2];
+    const rows = window.allData.filter(r => r.symbol === symbol && r.source === source);
+    if (!rows.length) return -Infinity;
 
-function getUniqueSymbolSources() {
-  if (!Array.isArray(window.allData)) return [];
-  const seen = new Set();
-  const combos = [];
-  window.allData.forEach(row => {
-    const key = `${row.symbol} (${row.source})`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      combos.push(key);
-    }
-  });
-  return combos;
-}
+    const floor = +arFloor.value;
+    const minMD = +mdMin.value;
+    const ceilMD = +mdCeil.value;
+    const prox  = proximityGridSize;
 
-function openSymbolList() {
-  symbolMultiSelectList.style.display = 'block';
-  symbolMultiSelectBox.classList.add('open');
-  symbolMultiSelectLabel.focus();
-}
-function closeSymbolList() {
-  symbolMultiSelectList.style.display = 'none';
-  symbolMultiSelectBox.classList.remove('open');
-}
-symbolMultiSelectLabel.onclick = () => {
-  if (symbolMultiSelectList.style.display === 'block') closeSymbolList();
-  else openSymbolList();
-};
-symbolMultiSelectLabel.onkeydown = (e) => {
-  if (e.key === 'Enter' || e.key === ' ') {
-    e.preventDefault(); openSymbolList();
+    const hd = makeHeatData(rows, floor, minMD, ceilMD, prox);
+    let maxH = -Infinity;
+    hd.H.forEach(row => row.forEach(v => { if (v != null && v > maxH) maxH = v; }));
+    return maxH;
   }
-};
-symbolMultiSelectList.onclick = (e) => {
-  if (e.target.tagName === "INPUT") {
-    const sym = e.target.value;
-    if (e.target.checked) {
-      if (!selectedSymbols.includes(sym)) selectedSymbols.push(sym);
-    } else {
-      selectedSymbols = selectedSymbols.filter(s => s !== sym);
-    }
-    updateSymbolLabel(); drawHeatmaps();
-  }
-};
-document.addEventListener('mousedown', (e) => {
-  if (!symbolMultiSelectBox.contains(e.target)) closeSymbolList();
-});
-function updateSymbolLabel() {
-  if (selectedSymbols.length === 0) symbolMultiSelectLabel.innerText = "Select Symbol";
-  else if (selectedSymbols.length === 1) symbolMultiSelectLabel.innerText = selectedSymbols[0];
-  else symbolMultiSelectLabel.innerText = `${selectedSymbols.length} symbols`;
-}
 
-// Select All and Unselect All button logic
-selectAllBtn.addEventListener('click', () => {
-  selectedSymbols = [...allSymbolList];
-  symbolMultiSelectList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = true; });
-  updateSymbolLabel();
-  drawHeatmaps();
-});
-unselectAllBtn.addEventListener('click', () => {
-  selectedSymbols = [];
-  symbolMultiSelectList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = false; });
-  updateSymbolLabel();
-  drawHeatmaps();
-});
-
-
-
-  // 5.5: Clear Data
+  // 5.6: Clear Data
   clearDataBtn.addEventListener('click', () => {
     window.allData = [];
+    window._rowSeen.clear();
     selectedSymbols = [];
     allSymbolList = [];
     symbolMultiSelectList.innerHTML = '';
@@ -427,14 +433,14 @@ unselectAllBtn.addEventListener('click', () => {
     heatmapsContainer.innerHTML = '';
   });
 
-  // 5.6: Load TickerNames.csv on page load
+  // 5.7: Load TickerNames.csv on page load
   async function loadTickerNames() {
     try {
       const resp = await fetch('/app/data/TickerNames.csv');
       if (!resp.ok) throw new Error('TickerNames.csv not found');
       const csv = await resp.text();
       csv.split(/\r?\n/).forEach((line, i) => {
-        if (!line.trim() || i === 0) return; // skip header or blank
+        if (!line.trim() || i === 0) return;
         const [symbol, name] = line.split(',');
         if (symbol && name) tickerNameMap[symbol.trim()] = name.trim();
       });
@@ -443,15 +449,17 @@ unselectAllBtn.addEventListener('click', () => {
     }
   }
 
-  // 5.7: Autoload CSV on Page Load
+  // 5.8: Autoload CSV on Page Load (LoadData1..20)
   window.addEventListener('DOMContentLoaded', async () => {
+    xVarNorm = normalizeHeader(xVarName);
+    yVarNorm = normalizeHeader(yVarName);
+
     await loadTickerNames();
+
     let filesToFetch = [];
-    for (let i = 1; i <= 20; i++) {
-      filesToFetch.push(`/app/data/LoadData${i}.csv`);
-    }
-    let filesLoaded = 0;
-    let atLeastOneLoaded = false;
+    for (let i = 1; i <= 20; i++) filesToFetch.push(`/app/data/LoadData${i}.csv`);
+    let filesLoaded = 0, atLeastOneLoaded = false;
+
     filesToFetch.forEach((filename) => {
       fetch(filename)
         .then(response => {
@@ -463,21 +471,17 @@ unselectAllBtn.addEventListener('click', () => {
           let shortName = filename.replace(/^\/app\/data\/|\.csv$/g, '');
           buildFromText(csvText, shortName);
         })
-        .catch(error => {
-          // Ignore errors (file missing)
-        })
+        .catch(() => {})
         .finally(() => {
           filesLoaded++;
           if (filesLoaded === filesToFetch.length) {
-            if (atLeastOneLoaded) {
-              populateSymbols();
-            }
+            if (atLeastOneLoaded) populateSymbols();
           }
         });
     });
   });
 
-  // 5.8: CSV File Input Handler
+  // 5.9: CSV File Input Handler
   csvInput.addEventListener('change', e => {
     const reader = new FileReader();
     reader.onload = evt => {
@@ -489,265 +493,43 @@ unselectAllBtn.addEventListener('click', () => {
     reader.readAsText(e.target.files[0]);
   });
 
-  // 5.9: Slider/Input Sync
-  [arFloor, arFloorNum].forEach(el => el.oninput = () => {
-    arFloor.value = arFloorNum.value = el.value; drawHeatmaps();
-  });
-  [mdMin, mdMinNum].forEach(el => el.oninput = () => {
-    mdMin.value = mdMinNum.value = el.value; drawHeatmaps();
-  });
-  [mdCeil, mdCeilNum].forEach(el => el.oninput = () => {
-    mdCeil.value = mdCeilNum.value = el.value; drawHeatmaps();
-  });
+  // 5.10: Slider/Input Sync
+  [arFloor, arFloorNum].forEach(el => el.oninput = () => { arFloor.value = arFloorNum.value = el.value; drawHeatmaps(); if (sortByMaxH) populateSymbols(); });
+  [mdMin, mdMinNum].forEach(el => el.oninput = () => { mdMin.value = mdMinNum.value = el.value; drawHeatmaps(); if (sortByMaxH) populateSymbols(); });
+  [mdCeil, mdCeilNum].forEach(el => el.oninput = () => { mdCeil.value = mdCeilNum.value = el.value; drawHeatmaps(); if (sortByMaxH) populateSymbols(); });
 
- // 5.9.1: Proximity Grid selector logic
-let proximityGridSize = parseInt(proximityGridSelect.value || "1");
-proximityGridSelect.addEventListener('change', function() {
-  proximityGridSize = parseInt(this.value);
-  // If we're sorted by Max H, repopulate symbol list (will trigger resort)
-  if (sortByMaxH) {
-    populateSymbols();
-  } else {
-    drawHeatmaps();
-  }
-});
-
-
-// 5.10: Draw Heatmaps (with direct symbol unselect in heatmap area)
-function drawHeatmaps() {
-  heatmapsContainer.innerHTML = '';
-  if (!selectedSymbols.length) {
-    const msg = document.createElement('div');
-    msg.style.textAlign = 'center';
-    msg.style.margin = '30px 0 30px 0';
-    msg.style.color = '#666';
-    msg.style.fontSize = '1.10em';
-    msg.innerHTML = 'Select one or more symbols above to view heatmaps.';
-    heatmapsContainer.appendChild(msg);
-    return;
-  }
-  let overallMaxH = -Infinity;
-  selectedSymbols.forEach((symbolSource, plotIdx) => {
-    const match = symbolSource.match(/^(.*) \((.*)\)$/);
-    if (!match) return;
-    const symbol = match[1];
-    const source = match[2];
-    const rows = window.allData.filter(r => r.symbol === symbol && r.source === source);
-    if (!rows.length) return;
-    const xs = Array.from(new Set(rows.map(r => r.rsi))).sort((a, b) => +a - +b);
-    const ys = Array.from(new Set(rows.map(r => r.day))).sort((a, b) => +a - +b);
-    const arM = ys.map(y => xs.map(x => {
-      const rec = rows.find(r => r.day === y && r.rsi === x);
-      return rec ? rec.ar : null;
-    }));
-    const mdM = ys.map(y => xs.map(x => {
-      const rec = rows.find(r => r.day === y && r.rsi === x);
-      return rec ? rec.md : null;
-    }));
-    const cmM = ys.map(y => xs.map(x => {
-      const rec = rows.find(r => r.day === y && r.rsi === x);
-      return rec ? rec.cm : null;
-    }));
-    const floor = +arFloor.value;
-    const minMD = +mdMin.value;
-    const ceilMD = +mdCeil.value;
-    let zminVal = window.colorbarMinGlobal;
-    let zmaxVal = window.colorbarMaxGlobal;
-
-    // 5.10.1 --- Calculate base H, then apply proximity grid averaging ---
-    const baseH = computeH(arM, mdM, floor, minMD);
-    const H = computeProximityGridAverage(baseH, proximityGridSize);
-
-    const EPSILON = 1e-6;
-    let mask;
-    if (ceilMD <= EPSILON) mask = mdM.map(row => row.map(() => 1));
-    else if (ceilMD >= 100 - EPSILON) mask = mdM.map(row => row.map(() => 0));
-    else mask = mdM.map(row => row.map(v => (v != null && v > ceilMD) ? 1 : 0));
-    let maxH = -Infinity, maxI = null, maxJ = null;
-    for (let i = 0; i < H.length; i++) {
-      for (let j = 0; j < H[i].length; j++) {
-        if (H[i][j] != null && H[i][j] > maxH) {
-          maxH = H[i][j];
-          maxI = i;
-          maxJ = j;
-        }
-      }
-    }
-    if (maxH > overallMaxH) overallMaxH = maxH;
-
-    // 5.10.2 --- Layout: Fund name between ticker/source and heatmap, plus per-heatmap Max H
-    const fundName = tickerNameMap[symbol] || "";
-    const section = document.createElement('div');
-    section.className = 'heatmap-section';
-    section.innerHTML = `
-      <div style="position:relative;">
-        <div id="heatmap-title-${plotIdx}" style="text-align:center;display:flex;align-items:center;justify-content:center;">
-          <div style="font-size:18px;color:#1b365d;font-weight:500;margin-bottom:0px; margin-right:7px;">
-            ${symbolSource}
-          </div>
-          <select style="margin-right:6px; height:20px; font-size:12px;" class="heatmap-unselect" data-symidx="${plotIdx}" title="Unselect this symbol">
-            <option value="">☰</option>
-            <option value="remove">Remove</option>
-          </select>
-        </div>
-        ${fundName ? `<div style="text-align:center;font-size:12px; color:#2e4057; margin-top:2px; margin-bottom:5px;">${fundName}</div>` : ""}
-        <div style="text-align:center;font-size:12px; font-weight:bold; color:#1e522e; margin-bottom:8px;">Current Max H: ${maxH === -Infinity ? '--' : maxH.toFixed(3)}</div>
-        <div style="display:flex; flex-direction:row; align-items:center;">
-          <div id="yHoverBox-${plotIdx}" style="width:45px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:56vh;">
-            <span style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; writing-mode: vertical-lr; transform: rotate(180deg); font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; letter-spacing:0.5px;">
-              <span id="hoverYValue-${plotIdx}" style="font-size:19px; font-weight:700; color:#253358; min-height:18px; margin-top:0; margin-bottom:8px;"></span>
-              <span style="font-size:16px; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-weight:300; color:#3e5678; margin-top:0;">Days</span>
-            </span>
-          </div>
-          <div style="flex:1;">
-            <div id="heatmap-${plotIdx}" style="height: 56vh;"></div>
-            <div class="colorbar-input-container" style="top: 2px;" id="colorbar-max-container-${plotIdx}">
-              <span class="colorbar-label">Max H</span>
-              <input type="number" step="0.01" value="${zmaxVal}" id="colorbar-max-${plotIdx}" class="colorbar-input">
-            </div>
-            <div class="colorbar-input-container" style="bottom: 16px; top:unset;" id="colorbar-min-container-${plotIdx}">
-              <span class="colorbar-label">Min H</span>
-              <input type="number" step="0.01" value="${zminVal}" id="colorbar-min-${plotIdx}" class="colorbar-input">
-            </div>
-          </div>
-        </div>
-        <div style="display: flex; flex-direction:column; align-items:center; margin-top:2px;">
-          <span style="font-size:16px; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-weight:300; color:#3e5678; margin-bottom:0; letter-spacing:0.5px;">RSI</span>
-          <span id="hoverXValue-${plotIdx}" style="font-size:19px; font-weight:700; color:#253358; min-height:18px;"></span>
-        </div>
-      </div>
-    `;
-    heatmapsContainer.appendChild(section);
-
-    // 5.10.3 --- Highlight region as a circle or rectangle SHAPE, in data coordinates ---
-    let shapes = [];
-    if (maxI !== null && maxJ !== null) {
-      const xCells = xs.length, yCells = ys.length;
-      const half = Math.floor(proximityGridSize / 2);
-      const x0idx = Math.max(0, maxJ - half), x1idx = Math.min(xCells - 1, maxJ + half);
-      const y0idx = Math.max(0, maxI - half), y1idx = Math.min(yCells - 1, maxI + half);
-      const x0 = xs[x0idx], x1 = xs[x1idx];
-      const y0 = ys[y0idx], y1 = ys[y1idx];
-      const cx = xs[maxJ], cy = ys[maxI];
-      const rx = Math.abs(x1 - x0) / 2 || 0.5;
-      const ry = Math.abs(y1 - y0) / 2 || 0.5;
-      const r = Math.max(rx, ry);
-      shapes.push({
-        type: "circle",
-        xref: "x",
-        yref: "y",
-        x0: cx - r, x1: cx + r,
-        y0: cy - r, y1: cy + r,
-        fillcolor: "rgba(255,255,200,0.19)",
-        line: { color: "rgba(255,255,200,0.3)", width: 2 },
-        layer: "above"
-      });
-    }
-
-    // 5.10.4 --- Main heatmap plot ---
-    const heatDiv = section.querySelector(`#heatmap-${plotIdx}`);
-    Plotly.newPlot(heatDiv, [
-      {
-        z: H, x: xs, y: ys, type: 'heatmap',
-        colorscale: [[0, 'green'], [0.5, 'yellow'], [1, 'red']],
-        zmin: zminVal, zmax: zmaxVal,
-        colorbar: {
-          thickness: 15, len: 0.92, x: 1.01, y: 0.5, tickfont: {size: 12}
-        },
-        customdata: arM.map((r, i) => r.map((_, j) => [arM[i][j], mdM[i][j], cmM[i][j], H[i][j]])),
-        hovertemplate: 'AR: %{customdata[0]:.2f}%<br>MD: %{customdata[1]:.2f}%<br>Calmar: %{customdata[2]:.2f}<br>H: %{customdata[3]:.3f}<extra></extra>'
-      },
-      {
-        z: mask, x: xs, y: ys, type: 'heatmap', showscale: false,
-        colorscale: [[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0.45)']], hoverinfo: 'skip'
-      }
-    ], {
-      margin: { l: 30, r: 65, t: 15, b: 45 },
-      xaxis: {
-        title: '', tickfont: {size:12}, titlefont:{size:12},
-        range: [Math.min(...xs), Math.max(...xs)],
-        constrain: 'range',
-        scaleanchor: 'y',
-        scaleratio: 1
-      },
-      yaxis: {
-        title: '', tickfont: {size:12}, titlefont:{size:12},
-        range: [Math.min(...ys), Math.max(...ys)],
-        constrain: 'range',
-        scaleanchor: 'x',
-        scaleratio: 1
-      },
-      annotations: [],
-      shapes
-    }, { responsive: true });
-
-    // 5.10.5 --- GLOBAL colorbar min/max event handlers (sync all boxes, update all charts)
-    setTimeout(() => {
-      const minInput = document.getElementById(`colorbar-min-${plotIdx}`);
-      const maxInput = document.getElementById(`colorbar-max-${plotIdx}`);
-      minInput.onchange = function() {
-        window.colorbarMinGlobal = Number(minInput.value);
-        document.querySelectorAll('.colorbar-input[id^="colorbar-min-"]').forEach(inp => inp.value = window.colorbarMinGlobal);
-        drawHeatmaps();
-      };
-      maxInput.onchange = function() {
-        window.colorbarMaxGlobal = Number(maxInput.value);
-        document.querySelectorAll('.colorbar-input[id^="colorbar-max-"]').forEach(inp => inp.value = window.colorbarMaxGlobal);
-        drawHeatmaps();
-      };
-      minInput.onblur = function() {
-        document.querySelectorAll('.colorbar-input[id^="colorbar-min-"]').forEach(inp => inp.value = window.colorbarMinGlobal);
-      }
-      maxInput.onblur = function() {
-        document.querySelectorAll('.colorbar-input[id^="colorbar-max-"]').forEach(inp => inp.value = window.colorbarMaxGlobal);
-      }
-    }, 0);
-
-    // 5.10.6 --- Custom crosshair values (RSI and Days)
-    const hoverX = section.querySelector(`#hoverXValue-${plotIdx}`);
-    const hoverY = section.querySelector(`#hoverYValue-${plotIdx}`);
-    heatDiv.on('plotly_hover', function(eventData) {
-      var pt = eventData.points[0];
-      hoverX.innerText = pt.x;
-      hoverY.innerText = pt.y;
-    });
-    heatDiv.on('plotly_unhover', function() {
-      hoverX.innerText = '';
-      hoverY.innerText = '';
-    });
+  // 5.10.1: Proximity Grid selector
+  let proximityGridSize = parseInt(proximityGridSelect.value || "1");
+  proximityGridSelect.addEventListener('change', function() {
+    proximityGridSize = parseInt(this.value);
+    if (sortByMaxH) populateSymbols(); else drawHeatmaps();
   });
 
-  // 5.10.7 --- Add symbol unselect event handler for each select in the heatmap area ---
-  document.querySelectorAll('.heatmap-unselect').forEach(sel => {
-    sel.onchange = function() {
-      if (this.value === 'remove') {
-        const idx = parseInt(this.getAttribute('data-symidx'));
-        if (!isNaN(idx) && idx < selectedSymbols.length) {
-          const symToRemove = selectedSymbols[idx];
-          selectedSymbols = selectedSymbols.filter((s, j) => j !== idx);
-          populateSymbols();
-        }
-      }
-      this.value = ''; // reset to default
-    };
+  // 5.10.2: Variable names & mode events
+  xVarNameInput.addEventListener('input', () => {
+    xVarName = xVarNameInput.value.trim() || 'RSI';
+    xVarNorm = normalizeHeader(xVarName);
+    if (sortByMaxH) populateSymbols(); else drawHeatmaps();
   });
-}
-// End Chapter 5.10
+  yVarNameInput.addEventListener('input', () => {
+    yVarName = yVarNameInput.value.trim() || 'Days';
+    yVarNorm = normalizeHeader(yVarName);
+    if (sortByMaxH) populateSymbols(); else drawHeatmaps();
+  });
+  modeSelect.addEventListener('change', () => {
+    displayMode = modeSelect.value;
+    if (sortByMaxH) populateSymbols(); else drawHeatmaps();
+  });
 
-
-
-
-
-
-  // 5.11: Compute H Function
+  // 5.11: Compute H and proximity average
   function computeH(ar, md, floor, minMD) {
     return ar.map((row, i) => row.map((v, j) => {
       if (v == null) return null;
-      return (v - floor) / Math.max(md[i][j], minMD);
+      const denom = Math.max(md[i][j], minMD);
+      return denom > 0 ? (v - floor) / denom : null;
     }));
   }
 
-  // 5.11.1: Compute Proximity Grid Average Function
   function computeProximityGridAverage(mat, windowSize) {
     if (windowSize <= 1) return mat;
     const half = Math.floor(windowSize / 2);
@@ -760,8 +542,7 @@ function drawHeatmaps() {
           for (let dj = -half; dj <= half; ++dj) {
             let ni = i + di, nj = j + dj;
             if (ni >= 0 && ni < nrows && nj >= 0 && nj < ncols && mat[ni][nj] != null) {
-              sum += mat[ni][nj];
-              count++;
+              sum += mat[ni][nj]; count++;
             }
           }
         }
@@ -771,49 +552,396 @@ function drawHeatmaps() {
     return result;
   }
 
-  // 5.12: Export CSV Logic
+  // 5.12: Build heat data (2D or 1D) for a given symbol/source row set
+  function makeHeatData(rows, floor, minMD, ceilMD, proxWin) {
+    const EPS = 1e-6;
+
+    // Helper: group rows by coords with averages
+    function avg(arr){ if(!arr.length) return null; let s=0,c=0; for(const v of arr){ if(v==null) continue; s+=v; c++; } return c? s/c : null; }
+
+    // Extract coordinates present
+    const xs = [], ys = [];
+    const xSet = new Set(), ySet = new Set();
+
+    rows.forEach(r => {
+      const x = safeNum(r.cols[xVarNorm]);
+      const y = safeNum(r.cols[yVarNorm]);
+      if (displayMode === '2d') {
+        if (x != null && y != null) { if (!xSet.has(x)) { xSet.add(x); xs.push(x); } if (!ySet.has(y)) { ySet.add(y); ys.push(y); } }
+      } else if (displayMode === '1d-x') {
+        if (x != null) { if (!ySet.has(x)) { ySet.add(x); ys.push(x); } } // use X values along vertical axis
+      } else { // '1d-y'
+        if (y != null) { if (!ySet.has(y)) { ySet.add(y); ys.push(y); } }
+      }
+    });
+
+    xs.sort((a,b)=>+a - +b);
+    ys.sort((a,b)=>+a - +b);
+
+    // 2D grid
+    if (displayMode === '2d') {
+      const xIndex = new Map(xs.map((v,i)=>[v,i]));
+      const yIndex = new Map(ys.map((v,i)=>[v,i]));
+
+      // Buckets for averaging duplicates
+      const arB = Array.from({length: ys.length}, ()=> Array.from({length: xs.length}, ()=>[]));
+      const mdB = Array.from({length: ys.length}, ()=> Array.from({length: xs.length}, ()=>[]));
+      const cmB = Array.from({length: ys.length}, ()=> Array.from({length: xs.length}, ()=>[]));
+
+      rows.forEach(r => {
+        const x = safeNum(r.cols[xVarNorm]);
+        const y = safeNum(r.cols[yVarNorm]);
+        if (x==null || y==null) return;
+        const i = yIndex.get(y), j = xIndex.get(x);
+        if (i==null || j==null) return;
+        arB[i][j].push(r.ar);
+        mdB[i][j].push(r.md);
+        cmB[i][j].push(r.cm);
+      });
+
+      const arM = arB.map(row => row.map(list => avg(list)));
+      const mdM = mdB.map(row => row.map(list => avg(list)));
+      const cmM = cmB.map(row => row.map(list => avg(list)));
+      const baseH = computeH(arM, mdM, floor, minMD);
+      const H = computeProximityGridAverage(baseH, proxWin);
+
+      // MD mask (dim cells with MD > ceilMD)
+      let mask;
+      if (ceilMD <= EPS) mask = mdM.map(row => row.map(()=>1));
+      else if (ceilMD >= 100 - EPS) mask = mdM.map(row => row.map(()=>0));
+      else mask = mdM.map(row => row.map(v => (v != null && v > ceilMD) ? 1 : 0));
+
+      return { xs, ys, arM, mdM, cmM, H, mask };
+    }
+
+    // 1D modes — build a single-column matrix along the chosen variable on Y
+    // Group by the single variable value; average H across the "other" dimension
+    const groups = new Map(); // val -> {ar:[], md:[], cm:[], hVals:[]}
+    rows.forEach(r => {
+      const x = safeNum(r.cols[xVarNorm]);
+      const y = safeNum(r.cols[yVarNorm]);
+      let keyVal = null, otherOK = false;
+      if (displayMode === '1d-x') { keyVal = x; otherOK = (x != null); }
+      else { keyVal = y; otherOK = (y != null); }
+      if (keyVal == null || !otherOK) return;
+      // per-row H (needs floor/minMD)
+      const denom = Math.max(r.md, minMD);
+      const h = (r.ar == null || denom <= 0) ? null : (r.ar - floor) / denom;
+
+      if (!groups.has(keyVal)) groups.set(keyVal, {ar:[], md:[], cm:[], hVals:[]});
+      const g = groups.get(keyVal);
+      if (r.ar != null) g.ar.push(r.ar);
+      if (r.md != null) g.md.push(r.md);
+      if (r.cm != null) g.cm.push(r.cm);
+      if (h != null) g.hVals.push(h);
+    });
+
+    // Ensure ys are the sorted unique values collected earlier
+    const yIndex = new Map(ys.map((v,i)=>[v,i]));
+    const n = ys.length;
+
+    const arM = Array.from({length:n}, ()=>[null]);
+    const mdM = Array.from({length:n}, ()=>[null]);
+    const cmM = Array.from({length:n}, ()=>[null]);
+    const Hcol= Array.from({length:n}, ()=>[null]);
+
+    ys.forEach((val, i) => {
+      const g = groups.get(val);
+      if (!g) return;
+      arM[i][0] = avg(g.ar);
+      mdM[i][0] = avg(g.md);
+      cmM[i][0] = avg(g.cm);
+      Hcol[i][0] = avg(g.hVals);
+    });
+
+    const H = computeProximityGridAverage(Hcol, proxWin);
+
+    // MD mask for 1D column
+    let mask;
+    if (ceilMD <= EPS) mask = mdM.map(_=>[1]);
+    else if (ceilMD >= 100 - EPS) mask = mdM.map(_=>[0]);
+    else mask = mdM.map(row => row.map(v => (v != null && v > ceilMD) ? 1 : 0));
+
+    // xs is a dummy single column
+    const xs1 = [0]; // single x column index
+    return { xs: xs1, ys, arM, mdM, cmM, H, mask };
+  }
+
+  // 5.13: Draw Heatmaps (dynamic variables + 1D/2D)
+  function drawHeatmaps() {
+    heatmapsContainer.innerHTML = '';
+    if (!selectedSymbols.length) {
+      const msg = document.createElement('div');
+      msg.style.textAlign = 'center';
+      msg.style.margin = '30px 0 30px 0';
+      msg.style.color = '#666';
+      msg.style.fontSize = '1.10em';
+      msg.innerHTML = 'Select one or more symbols above to view heatmaps.';
+      heatmapsContainer.appendChild(msg);
+      return;
+    }
+
+    let overallMaxH = -Infinity;
+
+    selectedSymbols.forEach((symbolSource, plotIdx) => {
+      const match = symbolSource.match(/^(.*) \((.*)\)$/);
+      if (!match) return;
+      const symbol = match[1];
+      const source = match[2];
+      const rows = window.allData.filter(r => r.symbol === symbol && r.source === source);
+      if (!rows.length) return;
+
+      const floor = +arFloor.value;
+      const minMD = +mdMin.value;
+      const ceilMD = +mdCeil.value;
+      let zminVal = window.colorbarMinGlobal;
+      let zmaxVal = window.colorbarMaxGlobal;
+
+      const { xs, ys, arM, mdM, cmM, H, mask } = makeHeatData(rows, floor, minMD, ceilMD, proximityGridSize);
+
+      // find max H
+      let maxH = -Infinity, maxI = null, maxJ = null;
+      for (let i = 0; i < H.length; i++) {
+        for (let j = 0; j < H[i].length; j++) {
+          if (H[i][j] != null && H[i][j] > maxH) { maxH = H[i][j]; maxI = i; maxJ = j; }
+        }
+      }
+      if (maxH > overallMaxH) overallMaxH = maxH;
+
+      // Section + title
+      const fundName = tickerNameMap[symbol] || "";
+      const section = document.createElement('div');
+      section.className = 'heatmap-section';
+
+      const modeLabel = (displayMode==='2d') ? '2D' : (displayMode==='1d-x' ? '1D (X)' : '1D (Y)');
+      section.innerHTML = `
+        <div style="position:relative;">
+          <div id="heatmap-title-${plotIdx}" style="text-align:center;display:flex;align-items:center;justify-content:center;">
+            <div style="font-size:18px;color:#1b365d;font-weight:500;margin-bottom:0px; margin-right:7px;">
+              ${symbolSource}
+            </div>
+            <select style="margin-right:6px; height:20px; font-size:12px;" class="heatmap-unselect" data-symidx="${plotIdx}" title="Unselect this symbol">
+              <option value="">☰</option>
+              <option value="remove">Remove</option>
+            </select>
+          </div>
+          ${fundName ? `<div style="text-align:center;font-size:12px; color:#2e4057; margin-top:2px; margin-bottom:5px;">${fundName}</div>` : ""}
+          <div style="text-align:center;font-size:12px; color:#2e4057; margin-top:0px; margin-bottom:6px;">
+            <b>Axes:</b> Y=&nbsp;${yVarName} &nbsp;|&nbsp; X=&nbsp;${xVarName} &nbsp;•&nbsp; <b>Mode:</b> ${modeLabel}
+          </div>
+          <div style="text-align:center;font-size:12px; font-weight:bold; color:#1e522e; margin-bottom:8px;">
+            Current Max H: ${maxH === -Infinity ? '--' : maxH.toFixed(3)}
+          </div>
+
+          <div style="display:flex; flex-direction:row; align-items:center;">
+            <div id="yHoverBox-${plotIdx}" style="width:45px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:56vh;">
+              <span style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; writing-mode: vertical-lr; transform: rotate(180deg); font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; letter-spacing:0.5px;">
+                <span id="hoverYValue-${plotIdx}" style="font-size:19px; font-weight:700; color:#253358; min-height:18px; margin-top:0; margin-bottom:8px;"></span>
+                <span style="font-size:16px; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-weight:300; color:#3e5678; margin-top:0;">${yVarName}</span>
+              </span>
+            </div>
+            <div style="flex:1;">
+              <div id="heatmap-${plotIdx}" style="height: 56vh;"></div>
+              <div class="colorbar-input-container" style="top: 2px;" id="colorbar-max-container-${plotIdx}">
+                <span class="colorbar-label">Max H</span>
+                <input type="number" step="0.01" value="${zmaxVal}" id="colorbar-max-${plotIdx}" class="colorbar-input">
+              </div>
+              <div class="colorbar-input-container" style="bottom: 16px; top:unset;" id="colorbar-min-container-${plotIdx}">
+                <span class="colorbar-label">Min H</span>
+                <input type="number" step="0.01" value="${zminVal}" id="colorbar-min-${plotIdx}" class="colorbar-input">
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction:column; align-items:center; margin-top:2px;">
+            <span style="font-size:16px; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-weight:300; color:#3e5678; margin-bottom:0; letter-spacing:0.5px;">${displayMode==='2d' ? xVarName : ''}</span>
+            <span id="hoverXValue-${plotIdx}" style="font-size:19px; font-weight:700; color:#253358; min-height:18px;"></span>
+          </div>
+        </div>
+      `;
+      heatmapsContainer.appendChild(section);
+
+      // Highlight region (circle) based on proximity window (for 1D, still highlights the best band)
+      let shapes = [];
+      if (maxI !== null && maxJ !== null) {
+        const xCells = xs.length, yCells = ys.length;
+        const half = Math.floor(proximityGridSize / 2);
+        const x0idx = Math.max(0, maxJ - half), x1idx = Math.min(xCells - 1, maxJ + half);
+        const y0idx = Math.max(0, maxI - half), y1idx = Math.min(yCells - 1, maxI + half);
+        const x0 = xs[x0idx] ?? 0, x1 = xs[x1idx] ?? 1;
+        const y0 = ys[y0idx], y1 = ys[y1idx];
+        const cx = xs[maxJ] ?? ((x0 + x1) / 2), cy = ys[maxI];
+        const rx = Math.abs((x1 - x0)) / 2 || 0.5;
+        const ry = Math.abs((y1 - y0)) / 2 || 0.5;
+        const r = Math.max(rx, ry);
+        shapes.push({
+          type: "circle",
+          xref: "x", yref: "y",
+          x0: cx - r, x1: cx + r,
+          y0: cy - r, y1: cy + r,
+          fillcolor: "rgba(255,255,200,0.19)",
+          line: { color: "rgba(255,255,200,0.3)", width: 2 },
+          layer: "above"
+        });
+      }
+
+      // Build Plotly traces
+      const heatDiv = section.querySelector(`#heatmap-${plotIdx}`);
+      const mainTrace = {
+        z: H, x: xs, y: ys, type: 'heatmap',
+        colorscale: [[0, 'green'], [0.5, 'yellow'], [1, 'red']],
+        zmin: zminVal, zmax: zmaxVal,
+        colorbar: { thickness: 15, len: 0.92, x: 1.01, y: 0.5, tickfont: {size: 12} },
+        customdata: arM.map((r, i) => r.map((_, j) => [arM[i][j], mdM[i][j], cmM[i][j], H[i][j]])),
+        hovertemplate: 'AR: %{customdata[0]:.2f}%<br>MD: %{customdata[1]:.2f}%<br>Calmar: %{customdata[2]:.2f}<br>H: %{customdata[3]:.3f}<extra></extra>'
+      };
+      const maskTrace = {
+        z: mask, x: xs, y: ys, type: 'heatmap', showscale: false,
+        colorscale: [[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0.45)']], hoverinfo: 'skip'
+      };
+
+      const layout = {
+        margin: { l: 30, r: 65, t: 15, b: 45 },
+        xaxis: { title: '', tickfont: {size:12}, titlefont:{size:12} },
+        yaxis: { title: '', tickfont: {size:12}, titlefont:{size:12} },
+        annotations: [],
+        shapes
+      };
+
+      // Keep square cells only in 2D (prevents odd stretching); 1D shows a wide column
+      if (displayMode === '2d') {
+        layout.xaxis.range = [Math.min(...xs), Math.max(...xs)];
+        layout.yaxis.range = [Math.min(...ys), Math.max(...ys)];
+        layout.xaxis.constrain = 'range';
+        layout.yaxis.constrain = 'range';
+        layout.xaxis.scaleanchor = 'y';
+        layout.yaxis.scaleanchor = 'x';
+        layout.xaxis.scaleratio = 1;
+        layout.yaxis.scaleratio = 1;
+      } else {
+        // 1D: hide x ticks; keep a visually "wide column"
+        layout.xaxis.showticklabels = false;
+        layout.xaxis.range = [ -0.5, 0.5 ]; // single column width
+        layout.yaxis.range = [Math.min(...ys), Math.max(...ys)];
+        layout.yaxis.constrain = 'range';
+      }
+
+      Plotly.newPlot(heatDiv, [mainTrace, maskTrace], layout, { responsive: true });
+
+      // Global colorbar inputs sync
+      setTimeout(() => {
+        const minInput = document.getElementById(`colorbar-min-${plotIdx}`);
+        const maxInput = document.getElementById(`colorbar-max-${plotIdx}`);
+        minInput.onchange = function() {
+          window.colorbarMinGlobal = Number(minInput.value);
+          document.querySelectorAll('.colorbar-input[id^="colorbar-min-"]').forEach(inp => inp.value = window.colorbarMinGlobal);
+          drawHeatmaps();
+        };
+        maxInput.onchange = function() {
+          window.colorbarMaxGlobal = Number(maxInput.value);
+          document.querySelectorAll('.colorbar-input[id^="colorbar-max-"]').forEach(inp => inp.value = window.colorbarMaxGlobal);
+          drawHeatmaps();
+        };
+        minInput.onblur = function() {
+          document.querySelectorAll('.colorbar-input[id^="colorbar-min-"]').forEach(inp => inp.value = window.colorbarMinGlobal);
+        }
+        maxInput.onblur = function() {
+          document.querySelectorAll('.colorbar-input[id^="colorbar-max-"]').forEach(inp => inp.value = window.colorbarMaxGlobal);
+        }
+      }, 0);
+
+      // Crosshair readouts (X hidden in 1D)
+      const hoverX = section.querySelector(`#hoverXValue-${plotIdx}`);
+      const hoverY = section.querySelector(`#hoverYValue-${plotIdx}`);
+      heatDiv.on('plotly_hover', function(eventData) {
+        var pt = eventData.points[0];
+        hoverX.innerText = (displayMode==='2d') ? pt.x : '';
+        hoverY.innerText = pt.y;
+      });
+      heatDiv.on('plotly_unhover', function() {
+        hoverX.innerText = '';
+        hoverY.innerText = '';
+      });
+    });
+
+    // add per-heatmap "remove" action
+    document.querySelectorAll('.heatmap-unselect').forEach(sel => {
+      sel.onchange = function() {
+        if (this.value === 'remove') {
+          const idx = parseInt(this.getAttribute('data-symidx'));
+          if (!isNaN(idx) && idx < selectedSymbols.length) {
+            selectedSymbols = selectedSymbols.filter((_, j) => j !== idx);
+            populateSymbols();
+          }
+        }
+        this.value = '';
+      };
+    });
+  }
+
+  // 5.14: Export CSV (variable-aware; 2D vs 1D)
   exportCSVBtn.addEventListener('click', function() {
     const floor = +arFloor.value;
     const minMD = +mdMin.value;
     const ceilMD = +mdCeil.value;
-    const hColName = `H (Rmin${floor}|Dmin${minMD}|Dmax${ceilMD}|Prox${proximityGridSize})`;
-    let csv = `Symbol,Source,Days,RSI,AR,MD,Calmar,${hColName}\n`;
+    const prox  = proximityGridSize;
+
+    const proxLabel = (displayMode==='2d' ? `|Prox${prox}` : `|Prox${prox}|${displayMode.toUpperCase()}`);
+    const hColName = `H (Rmin${floor}|Dmin${minMD}|Dmax${ceilMD}${proxLabel})`;
+
+    // dynamic headers for variables
+    const xHeader = xVarName || 'X';
+    const yHeader = yVarName || 'Y';
+
+    let header = (displayMode === '2d')
+      ? `Symbol,Source,${yHeader},${xHeader},AR,MD,Calmar,${hColName}\n`
+      : `Symbol,Source,${(displayMode==='1d-y')? yHeader : xHeader},AR_avg,MD_avg,Calmar_avg,${hColName}\n`;
+
+    let csv = header;
+
     selectedSymbols.forEach(symbolSource => {
       const match = symbolSource.match(/^(.*) \((.*)\)$/);
       if (!match) return;
       const symbol = match[1];
       const source = match[2];
       const rows = window.allData.filter(r => r.symbol === symbol && r.source === source);
-      const xs = Array.from(new Set(rows.map(r => r.rsi))).sort((a, b) => +a - +b);
-      const ys = Array.from(new Set(rows.map(r => r.day))).sort((a, b) => +a - +b);
-      const arM = ys.map(y => xs.map(x => {
-        const rec = rows.find(r => r.day === y && r.rsi === x);
-        return rec ? rec.ar : null;
-      }));
-      const mdM = ys.map(y => xs.map(x => {
-        const rec = rows.find(r => r.day === y && r.rsi === x);
-        return rec ? rec.md : null;
-      }));
-      const cmM = ys.map(y => xs.map(x => {
-        const rec = rows.find(r => r.day === y && r.rsi === x);
-        return rec ? rec.cm : null;
-      }));
-      const baseH = computeH(arM, mdM, floor, minMD);
-      const H = computeProximityGridAverage(baseH, proximityGridSize);
-      for (let i = 0; i < ys.length; ++i) {
-        for (let j = 0; j < xs.length; ++j) {
-          if (arM[i][j] == null) continue;
+      if (!rows.length) return;
+
+      const hd = makeHeatData(rows, floor, minMD, ceilMD, prox);
+      const { xs, ys, arM, mdM, cmM, H } = hd;
+
+      if (displayMode === '2d') {
+        for (let i = 0; i < ys.length; ++i) {
+          for (let j = 0; j < xs.length; ++j) {
+            if (H[i][j] == null && arM[i][j] == null && mdM[i][j] == null) continue;
+            csv += [
+              `"${symbol}"`,
+              `"${source}"`,
+              ys[i], xs[j],
+              (arM[i][j] == null ? "" : arM[i][j]),
+              (mdM[i][j] == null ? "" : mdM[i][j]),
+              (cmM[i][j] == null ? "" : cmM[i][j]),
+              (H[i][j] == null ? "" : H[i][j].toFixed(5))
+            ].join(",") + "\n";
+          }
+        }
+      } else {
+        // 1D export: one row per band along chosen variable (averages on AR/MD/Calmar)
+        for (let i = 0; i < ys.length; ++i) {
+          const ar = arM[i][0], md = mdM[i][0], cm = cmM[i][0], h = H[i][0];
+          if (ar == null && md == null && h == null) continue;
           csv += [
             `"${symbol}"`,
             `"${source}"`,
-            ys[i], xs[j],
-            arM[i][j], mdM[i][j],
-            (cmM[i][j] == null ? "" : cmM[i][j]),
-            (H[i][j] == null ? "" : H[i][j].toFixed(5))
+            ys[i],
+            (ar == null ? "" : ar),
+            (md == null ? "" : md),
+            (cm == null ? "" : cm),
+            (h  == null ? "" : h.toFixed(5))
           ].join(",") + "\n";
         }
       }
     });
+
     const blob = new Blob([csv], {type: "text/csv"});
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -822,79 +950,76 @@ function drawHeatmaps() {
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 0);
   });
 
-// 5.13: Build From Text Function (strip $ from headers, accept plurals for all key columns)
-function normalizeHeader(h) {
-  // Remove $, spaces, underscores, dashes, lower-case, and make singular for matching
-  return h
-    .toLowerCase()
-    .replace(/[\s_\-\$]+/g, '')   // remove $, spaces, underscores, dashes
-    .replace(/s$/, '');           // singularize by stripping trailing "s" if present
-}
-function findCol(headers, aliases) {
-  const normAliases = aliases.map(normalizeHeader);
-  for (let i = 0; i < headers.length; ++i) {
-    const hNorm = normalizeHeader(headers[i]);
-    if (normAliases.includes(hNorm)) return i;
+  // 5.15: Build From Text (variable-agnostic ingestion with robust header handling & de-dup)
+  function buildFromText(text, defaultSource) {
+    const lines = text.trim().split(/\r?\n/);
+    if (!lines.length) return;
+
+    const headers = lines[0].split(',');
+    const normHeaders = headers.map(h => normalizeHeader(h));
+
+    // locate core columns (symbol/source/AR/MD) using aliases
+    const coreAliases = {
+      symbol: ['symbol','ticker','name','etf'],
+      source: ['source','datasource','datasource','data'],
+      ar:     ['ar','annualizedreturn','annualizedreturn%','cagr'],
+      md:     ['md','maxdrawdown','drawdown','maxdd'],
+      calmar: ['calmar','calmarratio']
+    };
+    function findIdx(aliases) {
+      const normSet = aliases.map(normalizeHeader);
+      for (let i=0;i<normHeaders.length;i++) if (normSet.includes(normHeaders[i])) return i;
+      return -1;
+    }
+    const idxSymbol = findIdx(coreAliases.symbol);
+    const idxSource = findIdx(coreAliases.source);
+    const idxAR     = findIdx(coreAliases.ar);
+    const idxMD     = findIdx(coreAliases.md);
+    const idxCalmar = findIdx(coreAliases.calmar);
+
+    // For each row, capture numeric columns into cols{}
+    for (let i = 1; i < lines.length; ++i) {
+      const raw = lines[i];
+      if (!raw.trim()) continue;
+      const c = raw.split(',');
+      if (c.length < headers.length) continue;
+
+      const symbol = (idxSymbol !== -1 ? c[idxSymbol] : '').trim();
+      const source = (idxSource !== -1 && c[idxSource]) ? c[idxSource].trim() : defaultSource;
+
+      // Map of normalized header -> numeric value (only numeric kept)
+      const cols = {};
+      for (let k=0;k<headers.length;k++) {
+        const nh = normHeaders[k];
+        const val = safeNum(c[k]);
+        if (val != null) cols[nh] = val;
+      }
+
+      let ar = (idxAR !== -1) ? safeNum(c[idxAR]) : null;
+      let md = (idxMD !== -1) ? safeNum(c[idxMD]) : null;
+
+      if (decimalToPercentBox && decimalToPercentBox.checked) {
+        if (ar != null) ar *= 100;
+        if (md != null) md *= 100;
+      }
+
+      // prefer provided Calmar, else compute simple ar/md if md>0
+      let cm = null;
+      if (idxCalmar !== -1) cm = safeNum(c[idxCalmar]);
+      if (cm == null && md != null && md !== 0 && ar != null) cm = ar / md;
+
+      // De-dup key: symbol|source|all numeric cols signature
+      const sig = Object.keys(cols).sort().map(k => `${k}:${cols[k]}`).join('|');
+      const key = `${symbol}|${source}|${sig}|${ar ?? ''}|${md ?? ''}`;
+      if (window._rowSeen.has(key)) continue;
+      window._rowSeen.add(key);
+
+      window.allData.push({ symbol, source, ar, md, cm, cols });
+    }
   }
-  return -1;
-}
-
-function buildFromText(text, defaultSource) {
-  const lines = text.trim().split(/\r?\n/);
-  if (!lines.length) return;
-
-  const headerMap = {
-    symbol: ['symbol', 'ticker', 'name', 'etf'],
-    source: ['source', 'data source', 'datasource', 'data'],
-    day: ['day', 'timeframe', 'window', 'period', 'lookback'],
-    rsi: ['rsi', 'relative strength index'],
-    ar: ['ar', 'annualized return', 'cagr'],
-    md: ['md', 'max drawdown', 'drawdown']
-  };
-
-  const headers = lines[0].split(',');
-  const colIdx = {};
-  Object.keys(headerMap).forEach(key => {
-    const idx = findCol(headers, headerMap[key]);
-    if (idx === -1 && key !== 'source') {
-      throw new Error(`Missing column for ${key} (${headerMap[key].join('/')})`);
-    }
-    colIdx[key] = idx;
-  });
-
-  for (let i = 1; i < lines.length; ++i) {
-    if (!lines[i].trim()) continue;
-    const c = lines[i].split(',');
-    if (c.length < headers.length) continue;
-    const symbol = c[colIdx.symbol];
-    const source = (colIdx.source !== -1 && c[colIdx.source]) ? c[colIdx.source] : defaultSource;
-    const day = +c[colIdx.day];
-    const rsi = parseFloat(c[colIdx.rsi]);
-    let ar = parseFloat(c[colIdx.ar]), md = parseFloat(c[colIdx.md]);
-    if (decimalToPercentBox && decimalToPercentBox.checked) {
-      ar *= 100; md *= 100;
-    }
-    const cm = (md === 0 ? null : ar / md);
-
-    // Only add if this symbol/source/day/rsi doesn't already exist
-    if (!window.allData.some(row =>
-      row.symbol === symbol &&
-      row.source === source &&
-      row.day === day &&
-      row.rsi === rsi
-    )) {
-      window.allData.push({ symbol, source, day, rsi, ar, md, cm });
-    }
-  }
-}
-
-// End Chapter 5.13
-
-
-
 </script>
-
 <!-- End Chapter 5: MAIN SCRIPT -->
+
 
 </body>
 </html>
