@@ -219,10 +219,23 @@
   <div id="heatmapsContainer" style="margin-top:18px;"></div>
   <!-- End Chapter 4 -->
 
+<!-- Chapter 5: MAIN SCRIPT (Variable-agnostic + 1D/2D modes with path fallback) -->
 <script>
- <!-- Chapter 5: MAIN SCRIPT (Variable-agnostic + 1D/2D modes) -->
-<script>
-  // 5.1: CSV & ReadMe modal logic (unchanged UX)
+  // --- Small fetch helper with fallback between absolute and relative data paths ---
+  async function fetchTextWithFallback(paths) {
+    for (const url of paths) {
+      try {
+        const resp = await fetch(url, { cache: 'no-cache' });
+        if (resp.ok) {
+          const text = await resp.text();
+          return { text, url: resp.url || url };
+        }
+      } catch (_) {}
+    }
+    throw new Error('All fetch paths failed: ' + paths.join(', '));
+  }
+
+  // 5.1: CSV & ReadMe modal logic (unchanged UX, now with fallback paths)
   document.getElementById('showCsvTemplate').onclick = function() {
     document.getElementById('csvModal').style.display = 'flex';
   };
@@ -238,9 +251,10 @@
     document.getElementById('readMeModal').style.display = 'flex';
     document.getElementById('readMeContent').textContent = 'Loading...';
     try {
-      const resp = await fetch('/app/data/ReadMe.txt');
-      if (!resp.ok) throw new Error('File not found');
-      const text = await resp.text();
+      const { text } = await fetchTextWithFallback([
+        '/app/data/ReadMe.txt',
+        'data/ReadMe.txt'
+      ]);
       document.getElementById('readMeContent').textContent = text;
     } catch (e) {
       document.getElementById('readMeContent').textContent = "Could not load ReadMe.txt";
@@ -311,7 +325,6 @@
     if (v == null) return null;
     const t = String(v).trim();
     if (t === '') return null;
-    // allow "12.3%", "1,234.5", etc.
     const n = parseFloat(t.replace(/,/g, '').replace(/%$/, ''));
     return Number.isFinite(n) ? n : null;
   }
@@ -433,13 +446,14 @@
     heatmapsContainer.innerHTML = '';
   });
 
-  // 5.7: Load TickerNames.csv on page load
+  // 5.7: Load TickerNames.csv on page load (fallback)
   async function loadTickerNames() {
     try {
-      const resp = await fetch('/app/data/TickerNames.csv');
-      if (!resp.ok) throw new Error('TickerNames.csv not found');
-      const csv = await resp.text();
-      csv.split(/\r?\n/).forEach((line, i) => {
+      const { text } = await fetchTextWithFallback([
+        '/app/data/TickerNames.csv',
+        'data/TickerNames.csv'
+      ]);
+      text.split(/\r?\n/).forEach((line, i) => {
         if (!line.trim() || i === 0) return;
         const [symbol, name] = line.split(',');
         if (symbol && name) tickerNameMap[symbol.trim()] = name.trim();
@@ -449,36 +463,35 @@
     }
   }
 
-  // 5.8: Autoload CSV on Page Load (LoadData1..20)
+  // 5.8: Autoload CSV on Page Load (LoadData1..20) with fallback
   window.addEventListener('DOMContentLoaded', async () => {
     xVarNorm = normalizeHeader(xVarName);
     yVarNorm = normalizeHeader(yVarName);
 
     await loadTickerNames();
 
-    let filesToFetch = [];
-    for (let i = 1; i <= 20; i++) filesToFetch.push(`/app/data/LoadData${i}.csv`);
     let filesLoaded = 0, atLeastOneLoaded = false;
 
-    filesToFetch.forEach((filename) => {
-      fetch(filename)
-        .then(response => {
-          if (!response.ok) throw new Error('Network response was not ok');
-          return response.text();
-        })
-        .then(csvText => {
+    for (let i = 1; i <= 20; i++) {
+      (async () => {
+        try {
+          const { text, url } = await fetchTextWithFallback([
+            `/app/data/LoadData${i}.csv`,
+            `data/LoadData${i}.csv`
+          ]);
           atLeastOneLoaded = true;
-          let shortName = filename.replace(/^\/app\/data\/|\.csv$/g, '');
-          buildFromText(csvText, shortName);
-        })
-        .catch(() => {})
-        .finally(() => {
+          // derive shortName from whichever path succeeded
+          const m = url.match(/(?:\/app\/data\/|\/)?(LoadData\d+)\.csv$/i) || url.match(/(^|\/)(LoadData\d+)\.csv$/i);
+          const shortName = m ? m[m.length-1] : `LoadData${i}`;
+          buildFromText(text, shortName);
+        } catch (_) {
+          // ignore missing file
+        } finally {
           filesLoaded++;
-          if (filesLoaded === filesToFetch.length) {
-            if (atLeastOneLoaded) populateSymbols();
-          }
-        });
-    });
+          if (filesLoaded === 20 && atLeastOneLoaded) populateSymbols();
+        }
+      })();
+    }
   });
 
   // 5.9: CSV File Input Handler
@@ -556,7 +569,6 @@
   function makeHeatData(rows, floor, minMD, ceilMD, proxWin) {
     const EPS = 1e-6;
 
-    // Helper: group rows by coords with averages
     function avg(arr){ if(!arr.length) return null; let s=0,c=0; for(const v of arr){ if(v==null) continue; s+=v; c++; } return c? s/c : null; }
 
     // Extract coordinates present
@@ -615,16 +627,14 @@
     }
 
     // 1D modes — build a single-column matrix along the chosen variable on Y
-    // Group by the single variable value; average H across the "other" dimension
     const groups = new Map(); // val -> {ar:[], md:[], cm:[], hVals:[]}
     rows.forEach(r => {
       const x = safeNum(r.cols[xVarNorm]);
       const y = safeNum(r.cols[yVarNorm]);
-      let keyVal = null, otherOK = false;
-      if (displayMode === '1d-x') { keyVal = x; otherOK = (x != null); }
-      else { keyVal = y; otherOK = (y != null); }
-      if (keyVal == null || !otherOK) return;
-      // per-row H (needs floor/minMD)
+      let keyVal = null;
+      if (displayMode === '1d-x') keyVal = x;
+      else keyVal = y;
+      if (keyVal == null) return;
       const denom = Math.max(r.md, minMD);
       const h = (r.ar == null || denom <= 0) ? null : (r.ar - floor) / denom;
 
@@ -636,10 +646,7 @@
       if (h != null) g.hVals.push(h);
     });
 
-    // Ensure ys are the sorted unique values collected earlier
-    const yIndex = new Map(ys.map((v,i)=>[v,i]));
     const n = ys.length;
-
     const arM = Array.from({length:n}, ()=>[null]);
     const mdM = Array.from({length:n}, ()=>[null]);
     const cmM = Array.from({length:n}, ()=>[null]);
@@ -648,6 +655,7 @@
     ys.forEach((val, i) => {
       const g = groups.get(val);
       if (!g) return;
+      function avg(arr){ if(!arr.length) return null; let s=0,c=0; for(const v of arr){ if(v==null) continue; s+=v; c++; } return c? s/c : null; }
       arM[i][0] = avg(g.ar);
       mdM[i][0] = avg(g.md);
       cmM[i][0] = avg(g.cm);
@@ -662,7 +670,6 @@
     else if (ceilMD >= 100 - EPS) mask = mdM.map(_=>[0]);
     else mask = mdM.map(row => row.map(v => (v != null && v > ceilMD) ? 1 : 0));
 
-    // xs is a dummy single column
     const xs1 = [0]; // single x column index
     return { xs: xs1, ys, arM, mdM, cmM, H, mask };
   }
@@ -807,7 +814,7 @@
         shapes
       };
 
-      // Keep square cells only in 2D (prevents odd stretching); 1D shows a wide column
+      // Keep square cells only in 2D; 1D shows a wide column
       if (displayMode === '2d') {
         layout.xaxis.range = [Math.min(...xs), Math.max(...xs)];
         layout.yaxis.range = [Math.min(...ys), Math.max(...ys)];
@@ -818,9 +825,8 @@
         layout.xaxis.scaleratio = 1;
         layout.yaxis.scaleratio = 1;
       } else {
-        // 1D: hide x ticks; keep a visually "wide column"
         layout.xaxis.showticklabels = false;
-        layout.xaxis.range = [ -0.5, 0.5 ]; // single column width
+        layout.xaxis.range = [ -0.5, 0.5 ];
         layout.yaxis.range = [Math.min(...ys), Math.max(...ys)];
         layout.yaxis.constrain = 'range';
       }
@@ -863,7 +869,7 @@
       });
     });
 
-    // add per-heatmap "remove" action
+    // per-heatmap "remove"
     document.querySelectorAll('.heatmap-unselect').forEach(sel => {
       sel.onchange = function() {
         if (this.value === 'remove') {
@@ -888,7 +894,6 @@
     const proxLabel = (displayMode==='2d' ? `|Prox${prox}` : `|Prox${prox}|${displayMode.toUpperCase()}`);
     const hColName = `H (Rmin${floor}|Dmin${minMD}|Dmax${ceilMD}${proxLabel})`;
 
-    // dynamic headers for variables
     const xHeader = xVarName || 'X';
     const yHeader = yVarName || 'Y';
 
@@ -925,7 +930,6 @@
           }
         }
       } else {
-        // 1D export: one row per band along chosen variable (averages on AR/MD/Calmar)
         for (let i = 0; i < ys.length; ++i) {
           const ar = arM[i][0], md = mdM[i][0], cm = cmM[i][0], h = H[i][0];
           if (ar == null && md == null && h == null) continue;
@@ -958,10 +962,9 @@
     const headers = lines[0].split(',');
     const normHeaders = headers.map(h => normalizeHeader(h));
 
-    // locate core columns (symbol/source/AR/MD) using aliases
     const coreAliases = {
       symbol: ['symbol','ticker','name','etf'],
-      source: ['source','datasource','datasource','data'],
+      source: ['source','datasource','data'],
       ar:     ['ar','annualizedreturn','annualizedreturn%','cagr'],
       md:     ['md','maxdrawdown','drawdown','maxdd'],
       calmar: ['calmar','calmarratio']
@@ -977,7 +980,6 @@
     const idxMD     = findIdx(coreAliases.md);
     const idxCalmar = findIdx(coreAliases.calmar);
 
-    // For each row, capture numeric columns into cols{}
     for (let i = 1; i < lines.length; ++i) {
       const raw = lines[i];
       if (!raw.trim()) continue;
@@ -987,7 +989,7 @@
       const symbol = (idxSymbol !== -1 ? c[idxSymbol] : '').trim();
       const source = (idxSource !== -1 && c[idxSource]) ? c[idxSource].trim() : defaultSource;
 
-      // Map of normalized header -> numeric value (only numeric kept)
+      // Map of normalized header -> numeric value
       const cols = {};
       for (let k=0;k<headers.length;k++) {
         const nh = normHeaders[k];
@@ -1003,7 +1005,6 @@
         if (md != null) md *= 100;
       }
 
-      // prefer provided Calmar, else compute simple ar/md if md>0
       let cm = null;
       if (idxCalmar !== -1) cm = safeNum(c[idxCalmar]);
       if (cm == null && md != null && md !== 0 && ar != null) cm = ar / md;
@@ -1019,6 +1020,7 @@
   }
 </script>
 <!-- End Chapter 5: MAIN SCRIPT -->
+
 
 
 </body>
